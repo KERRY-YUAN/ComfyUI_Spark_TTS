@@ -1,7 +1,7 @@
 [project]
 name = "spark_tts"
 description = "This node package contains nodes for Spark-TTS controllable synthesis and voice cloning.."
-version = "1.0.0"
+version = "0.0.1"
 license = {file = "LICENSE"}
 dependencies = ["einops==0.8.1", "einx==0.3.0", "numpy==2.2.3", "omegaconf==2.3.0", "packaging==24.2", "safetensors==0.5.2", "soundfile==0.12.1", "soxr==0.5.0.post1", "torch==2.5.1", "torchaudio==2.5.1", "tqdm==4.66.5", "transformers==4.46.2", "# ComfyUI environment usually handles torch and torchaudio.", "# Transformers is a key dependency.", "# omegaconf, soundfile, soxr are used by SparkTTS's internal utils."]
 
@@ -10,6 +10,6 @@ Repository = "https://github.com/KERRY-YUAN/ComfyUI_Spark_TTS"
 #  Used by Comfy Registry https://comfyregistry.org
 
 [tool.comfy]
-PublisherId = ""
+PublisherId = "kerry"
 DisplayName = "ComfyUI_Spark_TTS"
 Icon = ""
