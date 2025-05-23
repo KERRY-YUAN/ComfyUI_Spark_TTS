@@ -69,56 +69,22 @@ def _get_module_device(module: Optional[torch.nn.Module]) -> Optional[torch.devi
         logger.warning(f"Could not determine device for module {type(module).__name__}: {e}")
         return None
 
-def _initialize_global_paths(
-    model_path_override_str: Optional[str] = None,
-    speakers_path_override_str: Optional[str] = None
-):
+def _initialize_global_paths(): # Removed override parameters
     global _SPARK_MODEL_DIR_GLOBAL, _SPEAKERS_DATA_DIR_GLOBAL, _SPEAKERS_INFO_FILE_GLOBAL
     
-    comfyui_root_path_for_defaults = Path(folder_paths.base_path) # Get ComfyUI root path
+    comfyui_root_path_for_defaults = Path(folder_paths.base_path)
 
+    # --- Model Path Handling ---
     default_model_dir = str(comfyui_root_path_for_defaults / "models" / "TTS" / "Spark-TTS" / "Spark-TTS-0.5B")
+    if _SPARK_MODEL_DIR_GLOBAL is None or _SPARK_MODEL_DIR_GLOBAL != default_model_dir : # Initialize or update if logic changes
+        logger.info(f"Setting Spark-TTS Model Dir to default: {default_model_dir}")
+        _SPARK_MODEL_DIR_GLOBAL = default_model_dir
     
-    new_model_dir_candidate = _SPARK_MODEL_DIR_GLOBAL 
-    if model_path_override_str and model_path_override_str.strip():
-        # If override is relative, resolve it against ComfyUI root
-        path_to_check = model_path_override_str.strip()
-        if not os.path.isabs(path_to_check):
-            path_to_check = str(comfyui_root_path_for_defaults / path_to_check)
-        
-        if os.path.isdir(path_to_check):
-            new_model_dir_candidate = path_to_check
-        else:
-            logger.warning(f"Invalid model_path_override: '{model_path_override_str}' (resolved to '{path_to_check}'). Path does not exist or is not a directory.")
-    
-    if new_model_dir_candidate is None: 
-        new_model_dir_candidate = default_model_dir
-
-    if _SPARK_MODEL_DIR_GLOBAL != new_model_dir_candidate:
-        logger.info(f"Setting Spark-TTS Model Dir to: {new_model_dir_candidate}")
-        _SPARK_MODEL_DIR_GLOBAL = new_model_dir_candidate
-
-    default_speakers_dir = str(Path(current_node_directory) / "Spark-TTS-Speakers")
-    new_speakers_dir_candidate = _SPEAKERS_DATA_DIR_GLOBAL
-
-    if speakers_path_override_str and speakers_path_override_str.strip():
-        path_to_check_speakers = speakers_path_override_str.strip()
-        if not os.path.isabs(path_to_check_speakers):
-             # For speakers path, if relative, it could be relative to ComfyUI root or custom_node.
-             # Prioritizing relative to ComfyUI root for consistency with model_path_override.
-            path_to_check_speakers = str(comfyui_root_path_for_defaults / path_to_check_speakers)
-
-        if os.path.isdir(path_to_check_speakers):
-            new_speakers_dir_candidate = path_to_check_speakers
-        else:
-            logger.warning(f"Invalid speakers_path_override: '{speakers_path_override_str}' (resolved to '{path_to_check_speakers}'). Path does not exist or is not a directory.")
-
-    if new_speakers_dir_candidate is None: 
-        new_speakers_dir_candidate = default_speakers_dir
-
-    if _SPEAKERS_DATA_DIR_GLOBAL != new_speakers_dir_candidate:
-        logger.info(f"Setting Spark-TTS Speakers Dir to: {new_speakers_dir_candidate}")
-        _SPEAKERS_DATA_DIR_GLOBAL = new_speakers_dir_candidate
+    # --- Speaker Preset Path Handling ---
+    default_speakers_dir = str(comfyui_root_path_for_defaults / "models" / "TTS" / "Speaker_Preset")
+    if _SPEAKERS_DATA_DIR_GLOBAL is None or _SPEAKERS_DATA_DIR_GLOBAL != default_speakers_dir: # Initialize or update
+        logger.info(f"Setting Speaker Preset Dir to default: {default_speakers_dir}")
+        _SPEAKERS_DATA_DIR_GLOBAL = default_speakers_dir
     
     if _SPEAKERS_DATA_DIR_GLOBAL:
         _SPEAKERS_INFO_FILE_GLOBAL = os.path.join(_SPEAKERS_DATA_DIR_GLOBAL, "speakers_info.json")
@@ -162,13 +128,13 @@ def ensure_models_loaded(device_to_use: torch.device, model_path_for_loading: st
         return
 
     if _global_model is not None: 
-        logger.info(f"Spark-TTS model path changed from '{_current_loaded_model_path}' to '{model_path_for_loading}' or models need reloading. Reloading...")
+        logger.info(f"Spark-TTS model path may have changed or models need reloading. Current loading path: '{model_path_for_loading}', Previously loaded: '{_current_loaded_model_path}'. Reloading...")
         unload_all_models() 
 
     logger.info(f"Loading Spark-TTS models from: {model_path_for_loading}")
     if not model_path_for_loading or not os.path.exists(model_path_for_loading):
         logger.error(f"Spark-TTS model directory not found: {model_path_for_loading}")
-        raise FileNotFoundError(f"Spark-TTS model directory not found: {model_path_for_loading}. Please check path.")
+        raise FileNotFoundError(f"Spark-TTS model directory not found: {model_path_for_loading}. Please check path with Model_Download.bat.")
     
     llm_model_subpath = os.path.join(model_path_for_loading, "LLM")
     if not os.path.exists(llm_model_subpath):
@@ -358,17 +324,11 @@ class Spark_TTS_Creation:
 
     @classmethod
     def INPUT_TYPES(cls):
-        _initialize_global_paths() 
-        # Default path for UI display. This should ideally be a relative path from ComfyUI root.
-        # `folder_paths.base_path` gives the ComfyUI root.
-        # The actual resolution of "./models/..." happens in _initialize_global_paths.
-        default_model_path_ui = os.path.join(".", "models", "TTS", "Spark-TTS", "Spark-TTS-0.5B").replace("\\","/")
-
-
+        _initialize_global_paths() # Ensures paths are set based on defaults
         return {
             "required": {
                 "text": ("STRING", {"default": "Hello, Spark Text to Speech is working!", "multiline": True}),
-                "model_path_override": ("STRING", {"default": default_model_path_ui, "multiline": False, "placeholder": "Optional: Path to Spark-TTS-0.5B folder"}),
+                # "model_path_override" removed from UI
                 "gender": (list(SPARK_GENDER_MAP.keys()), {"default": "female"}),
                 "pitch": (list(SPARK_LEVELS_MAP.keys()), {"default": "moderate"}),
                 "speed": (list(SPARK_LEVELS_MAP.keys()), {"default": "moderate"}),
@@ -384,18 +344,18 @@ class Spark_TTS_Creation:
     FUNCTION = "generate_speech"
     CATEGORY = "ComfyUI_Spark_TTS"
 
-    def generate_speech(self, text: str, model_path_override: str, gender: str, pitch: str, speed: str,
+    def generate_speech(self, text: str, gender: str, pitch: str, speed: str,
                         temperature: float, top_k: int, top_p: float, max_new_tokens: int,
                         keep_model_loaded: bool):
         
-        _initialize_global_paths(model_path_override_str=model_path_override)
+        _initialize_global_paths() # No override string passed
         
         node_status = "Initializing..."
         final_sample_rate = 16000 
         
         current_model_path_to_load = _SPARK_MODEL_DIR_GLOBAL
         if not current_model_path_to_load or not os.path.isdir(current_model_path_to_load):
-            error_msg = f"Model path is invalid or not configured: '{current_model_path_to_load}'. Check path override or default setup."
+            error_msg = f"Model path is invalid or not configured: '{current_model_path_to_load}'. Please run Model_Download.bat or check paths."
             logger.error(error_msg)
             return ({"waveform": torch.zeros(1, 1, 1), "sample_rate": final_sample_rate}, f"Error: {error_msg}")
 
@@ -413,6 +373,12 @@ class Spark_TTS_Creation:
                 temperature=temperature, top_k=top_k, top_p=top_p,
                 max_new_tokens=max_new_tokens
             )
+            if wav_array.size == 0:
+                node_status = "Error: Synthesis resulted in empty audio (no semantic tokens found)."
+                logger.error(node_status)
+                error_audio_tensor = torch.zeros((1, 1, int(final_sample_rate * 0.1)), dtype=torch.float32)
+                return ({"waveform": error_audio_tensor, "sample_rate": final_sample_rate}, node_status)
+            
             node_status = "Success"
         except Exception as e:
             error_detail = str(e)
@@ -461,22 +427,17 @@ class Spark_TTS_Clone:
         
     @classmethod
     def INPUT_TYPES(cls):
-        _initialize_global_paths() 
-        
-        default_model_path_ui = os.path.join(".", "models", "TTS", "Spark-TTS", "Spark-TTS-0.5B").replace("\\","/")
-        default_speakers_path_ui = os.path.join(".", "custom_nodes", "ComfyUI_Spark_TTS", "Spark-TTS-Speakers").replace("\\","/")
+        _initialize_global_paths() # Ensures paths are set based on defaults
         
         temp_instance = cls()
-        # Use the globally initialized path for speakers to populate the dropdown initially
         speaker_names = temp_instance._refresh_speaker_list_from_path(_SPEAKERS_DATA_DIR_GLOBAL)
-
 
         return {
             "required": {
                 "text": ("STRING", {"default": "Cloning a voice with Spark TTS is interesting.", "multiline": True}),
                 "custom_prompt_text": ("STRING", {"multiline": True, "default": "", "placeholder": "Text for Audio reference (optional )"}),
-                "model_path_override": ("STRING", {"default": default_model_path_ui, "multiline": False, "placeholder": "Optional: Path to Spark-TTS-0.5B folder"}),
-                "speakers_path_override": ("STRING", {"default": default_speakers_path_ui, "multiline": False, "placeholder": "Optional: Path to Spark-TTS-Speakers folder"}),
+                # "model_path_override" removed from UI
+                # "speakers_path_override" removed from UI
                 "speaker_preset": (speaker_names, {"default": speaker_names[0] if speaker_names and not speaker_names[0].startswith("(") else ""}),
                 "pitch": (list(SPARK_LEVELS_MAP.keys()), {"default": "moderate"}), 
                 "speed": (list(SPARK_LEVELS_MAP.keys()), {"default": "moderate"}), 
@@ -496,16 +457,12 @@ class Spark_TTS_Clone:
     CATEGORY = "ComfyUI_Spark_TTS"
 
     def clone_voice(self, text: str, custom_prompt_text: str,
-                    model_path_override: str, speakers_path_override: str,
-                    speaker_preset: str, pitch: str, speed: str,
+                    speaker_preset: str, pitch: str, speed: str, # Removed path overrides from parameters
                     temperature: float, top_k: int, top_p: float, max_new_tokens: int,
                     keep_model_loaded: bool,
                     Audio_reference: Optional[Dict[str, Any]] = None): 
         
-        _initialize_global_paths(
-            model_path_override_str=model_path_override,
-            speakers_path_override_str=speakers_path_override
-        )
+        _initialize_global_paths() # No override strings passed
         self._refresh_speaker_list_from_path(_SPEAKERS_DATA_DIR_GLOBAL) 
 
         node_status = "Initializing..."
@@ -518,11 +475,12 @@ class Spark_TTS_Clone:
         current_speakers_path = _SPEAKERS_DATA_DIR_GLOBAL
         
         if not current_model_path_to_load or not os.path.isdir(current_model_path_to_load):
-            error_msg = f"Model path is invalid or not configured: '{current_model_path_to_load}'. Check path override or default setup."
+            error_msg = f"Model path is invalid or not configured: '{current_model_path_to_load}'. Please run Model_Download.bat or check paths."
             logger.error(error_msg)
             return ({"waveform": torch.zeros(1, 1, 1), "sample_rate": final_sample_rate}, f"Error: {error_msg}")
         if not current_speakers_path or not os.path.isdir(current_speakers_path):
-            logger.warning(f"Speakers path is invalid or not configured: '{current_speakers_path}'. Presets might not work.")
+            logger.warning(f"Speaker Preset path is invalid or not configured: '{current_speakers_path}'. Presets might not work. Please run Model_Download.bat.")
+
 
         try:
             node_status = f"Loading model from {current_model_path_to_load}..."
@@ -550,8 +508,8 @@ class Spark_TTS_Clone:
             elif speaker_preset and not speaker_preset.startswith("("): 
                 logger.info(f"Using preset speaker: {speaker_preset}")
                 node_status = f"Using preset speaker: {speaker_preset}... "
-                if not current_speakers_path or not os.path.isdir(current_speakers_path):
-                    raise FileNotFoundError(f"Speakers path '{current_speakers_path}' is invalid or not set, but speaker_preset '{speaker_preset}' was selected.")
+                if not current_speakers_path or not os.path.isdir(current_speakers_path): # Should be caught above, but double check
+                    raise FileNotFoundError(f"Speaker Preset path '{current_speakers_path}' is invalid. Please run Model_Download.bat or check paths.")
 
                 if speaker_preset not in self.available_speakers:
                     error_msg = f"Preset speaker '{speaker_preset}' not found in speakers_info.json at '{current_speakers_path}'. Available: {list(self.available_speakers.keys())}"
@@ -576,6 +534,12 @@ class Spark_TTS_Clone:
                 temperature=temperature, top_k=top_k, top_p=top_p,
                 max_new_tokens=max_new_tokens
             )
+            if wav_array.size == 0:
+                node_status += " Error: Synthesis resulted in empty audio (no semantic tokens found)."
+                logger.error(node_status)
+                error_audio_tensor = torch.zeros((1, 1, int(final_sample_rate * 0.1)), dtype=torch.float32)
+                return ({"waveform": error_audio_tensor, "sample_rate": final_sample_rate}, node_status)
+            
             node_status = "Success." 
         except Exception as e:
             error_detail = str(e)

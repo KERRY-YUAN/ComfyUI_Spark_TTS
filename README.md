@@ -18,7 +18,6 @@ A custom node package for ComfyUI that integrates the powerful Spark-TTS text-to
 *   **Function**: Input text, select parameters like gender, pitch, and speed to generate customized speech.
 *   **Key Inputs**:
     *   `text`: The text to be converted to speech.
-    *   `model_path_override`: (Optional) Specify the path to the `Spark-TTS-0.5B` model folder.
     *   `gender`: Choose "female" or "male".
     *   `pitch`: Select pitch level (from "very_low" to "very_high").
     *   `speed`: Select speed level (from "very_low" to "very_high").
@@ -35,8 +34,6 @@ A custom node package for ComfyUI that integrates the powerful Spark-TTS text-to
 *   **Key Inputs**:
     *   `text`: The text to be read with the cloned timbre.
     *   `custom_prompt_text`: (Optional) The transcript corresponding to the reference audio, helps improve cloning quality.
-    *   `model_path_override`: (Optional) Specify the path to the `Spark-TTS-0.5B` model folder.
-    *   `speakers_path_override`: (Optional) Specify the path to the `Spark-TTS-Speakers` folder (containing `speakers_info.json` and preset audios).
     *   `speaker_preset`: Select a speaker from a preset list as the reference voice (ignored if `Audio_reference` is connected).
     *   `Audio_reference`: (Optional) Connect an external audio source as the reference for voice cloning (e.g., output of a "Load Audio" node). **This takes precedence over `speaker_preset`**.
     *   `pitch`, `speed`: (Optional) Adjust the pitch and speed of the output voice, mainly effective when the cloning signal is not strong or for future features.
@@ -75,45 +72,41 @@ A custom node package for ComfyUI that integrates the powerful Spark-TTS text-to
 
 ## 📥 Model and Data Setup
 
-You need to download the Spark-TTS model and place the speaker data according to the structure recognized by the nodes.
+The Spark-TTS model and Speaker Preset data **must be placed in specific default locations** for the nodes to function correctly. Please use the `Model_Download.bat` script provided with this node package to download and place them automatically, or manually place them as described below.
 
-1.  **Download Spark-TTS 0.5B Model:**
-    Download the `Spark-TTS-0.5B` model folder from its [Hugging Face page (SparkAudio/Spark-TTS-0.5B)](https://huggingface.co/SparkAudio/Spark-TTS-0.5B) and place it inside `ComfyUI/models/TTS/Spark-TTS/`.
+1.  **Spark-TTS 0.5B Model Location:**
+    The `Spark-TTS-0.5B` model folder must be located at:
+    `ComfyUI/models/TTS/Spark-TTS/Spark-TTS-0.5B/`
+    You can download it from its [Hugging Face page (SparkAudio/Spark-TTS-0.5B)](https://huggingface.co/SparkAudio/Spark-TTS-0.5B).
 	
 2.  **Speaker Preset Files Location:**
-    The `Spark-TTS-Speakers` folder, containing `speakers_info.json` and preset prompt audio files, should be located directly within your `ComfyUI_Spark_TTS` custom node directory: `ComfyUI/custom_nodes/ComfyUI_Spark_TTS/Spark-TTS-Speakers/`. You can customize this path using the "speakers_path_override" input in the `Spark_TTS_Clone` node.
+    The `Speaker_Preset` folder (containing `speakers_info.json` and preset prompt audio files) must be located at:
+    `ComfyUI/models/TTS/Speaker_Preset/`
+    This folder and its contents can be downloaded using the `Model_Download.bat` script (which clones it from [KERRY-YUAN/Speaker_Preset on GitHub](https://github.com/KERRY-YUAN/Speaker_Preset)).
 
 3.  **Directory Structure Reference:**
-    The expected final file structure is:
+    The required final file structure is:
 
     ```
     ComfyUI/
     ├── custom_nodes/
     │   └── ComfyUI_Spark_TTS/
-    │       ├── sparktts/              <-- The sparktts Python package copied from the official SparkTTS repo
-    │       │   ├── __init__.py        <-- An empty __init__.py file
-    │       │   └── ... (other subdirectories and files, each with __init__.py)
+    │       ├── sparktts/             
     │       ├── NodeSparkTTS.py
-    │       ├── __init__.py            <-- __init__.py for the ComfyUI_Spark_TTS custom node package
-    │       ├── requirements.txt
-    │       ├── LICENSE
-    │       ├── README.md
-    │       └── Spark-TTS-Speakers/    <-- Place speaker prompt and info files here
-    │           ├── speakers_info.json # Crucial: Ensure this file is valid JSON!
-    │           ├── SpeakerName1_prompt.wav
-    │           └── ...                # Other speaker prompt audio files
+    │       ├── Model_Download.bat  <-- Run this script!
+    │       └── ... (other package files)
     └── models/
         └── TTS/
-            └── Spark-TTS/
-                └── Spark-TTS-0.5B/    <-- Place the downloaded Spark-TTS model folder here
-                    ├── BiCodec/
-                    ├── LLM/
-                    ├── wav2vec2-large-xlsr-53/
-                    └── config.yaml
+            ├── Spark-TTS/
+            │   └── Spark-TTS-0.5B/    <-- Spark-TTS model folder
+            └── Speaker_Preset/        <-- Speaker Preset folder
+                ├── speakers_info.json 
+                └── ...                
     ```
+    *   The `speakers_info.json` file within the `Speaker_Preset` folder maps speaker names to their prompt texts.
+    *   Prompt audio files should be named `{SpeakerName}_prompt.{extension}`.
     *   The `sparktts` folder within the `ComfyUI_Spark_TTS` node package is copied from the official Spark-TTS repository. All its subdirectories should contain an `__init__.py` file to be recognized as Python packages.
-    *   The `Spark-TTS-Speakers` folder is now part of the custom node package itself. You can override this path in the `Spark_TTS_Clone` node if you wish to store speaker data elsewhere.
-    *   The `speakers_info.json` file within the `Spark-TTS-Speakers` folder maps speaker names (for the dropdown in the `Spark_TTS_Clone` node) to their corresponding prompt texts, which you can add to or modify. Example:
+    *   The `speakers_info.json` file folder maps speaker names (for the dropdown in the `Spark_TTS_Clone` node) to their corresponding prompt texts, which you can add to or modify. Example:
         ```json
         {
             "Alice": "This is the reference text for Alice's voice.",
@@ -154,7 +147,6 @@ Please refer to the [LICENSE](LICENSE) file for details.
 *   **功能**: 输入文本，选择性别、音高和语速等参数，生成定制化的语音。
 *   **主要输入**:
     *   `text`: 要转为语音的文字。
-    *   `model_path_override`: （可选）指定 `Spark-TTS-0.5B` 模型文件夹的路径。
     *   `gender`: 选择“female”或“male”。
     *   `pitch`: 选择音高（从“very_low”到“very_high”）。
     *   `speed`: 选择语速（从“very_low”到“very_high”）。
@@ -171,8 +163,6 @@ Please refer to the [LICENSE](LICENSE) file for details.
 *   **主要输入**:
     *   `text`: 要用克隆音色朗读的文字。
     *   `custom_prompt_text`: （可选）参考音频对应的文字稿，有助于提高克隆效果。
-    *   `model_path_override`: （可选）指定 `Spark-TTS-0.5B` 模型文件夹的路径。
-    *   `speakers_path_override`: （可选）指定 `Spark-TTS-Speakers` 文件夹（内含 `speakers_info.json` 和预设音频）的路径。
     *   `speaker_preset`: 从预设列表中选择一个说话人作为参考音（如果连接了 `Audio_reference`，则此项无效）。
     *   `Audio_reference`: （可选）连接一个外部音频作为声音克隆的参考（如“加载音频”节点的输出）。**此项优先于 `speaker_preset`**。
     *   `pitch`, `speed`: （可选）调整输出语音的音高和语速，主要在克隆信号不强时或为未来功能预留。
@@ -211,45 +201,41 @@ Please refer to the [LICENSE](LICENSE) file for details.
 
 ## 📥 模型和数据设置
 
-您需要下载 Spark-TTS 模型，并将说话人数据按照节点识别的特定结构放置。
+Spark-TTS 模型和说话人预设数据 **必须放置在特定的默认位置**，节点才能正常工作。请使用本节点包随附的 `Model_Download.bat` 脚本来自动下载和放置它们，或者按照下述说明手动放置。
 
-1.  **下载 Spark-TTS 0.5B 模型：**
-    从其 [Hugging Face 页面 (SparkAudio/Spark-TTS-0.5B)](https://huggingface.co/SparkAudio/Spark-TTS-0.5B) 下载 `Spark-TTS-0.5B` 模型文件夹，放在`ComfyUI/models/TTS/Spark-TTS/`内。
+1.  **Spark-TTS 0.5B 模型位置：**
+    `Spark-TTS-0.5B` 模型文件夹必须位于：
+    `ComfyUI/models/TTS/Spark-TTS/Spark-TTS-0.5B/`
+    您可以从其 [Hugging Face 页面 (SparkAudio/Spark-TTS-0.5B)](https://huggingface.co/SparkAudio/Spark-TTS-0.5B) 下载。
 	
 2.  **说话人预设文件位置：**
-    包含 `speakers_info.json` 和预设提示音频文件的 `Spark-TTS-Speakers` 文件夹，现在应该直接位于您的 `ComfyUI_Spark_TTS` 自定义节点目录中：`ComfyUI/custom_nodes/ComfyUI_Spark_TTS/Spark-TTS-Speakers/`。您可以在 `Spark_TTS_Clone` 节点中使用 "speakers_path_override" 输入框来指定此路径的自定义位置。
+    `Speaker_Preset` 文件夹（包含 `speakers_info.json` 和预设提示音频文件）必须位于：
+    `ComfyUI/models/TTS/Speaker_Preset/`
+    此文件夹及其内容可以使用 `Model_Download.bat` 脚本下载（它会从 [GitHub上的 KERRY-YUAN/Speaker_Preset](https://github.com/KERRY-YUAN/Speaker_Preset) 克隆）。
 
 3.  **目录结构参考：**
-    预期的最终文件架构如下：
+    必需的最终文件架构如下：
 
     ```
     ComfyUI/
     ├── custom_nodes/
     │   └── ComfyUI_Spark_TTS/
-    │       ├── sparktts/      <-- 从官方 SparkTTS 仓库复制的 sparktts Python包
-    │       │   ├── __init__.py  <-- 空的 __init__.py 文件
-    │       │   └── ... (其他子目录和文件，每个都带有 __init__.py)
+    │       ├── sparktts/             
     │       ├── NodeSparkTTS.py
-    │       ├── __init__.py      <-- ComfyUI_Spark_TTS 自定义节点包的 __init__.py
-    │       ├── requirements.txt
-    │       ├── LICENSE
-    │       ├── README.md
-    │       └── Spark-TTS-Speakers/      <-- 将说话人提示和信息文件放在此处
-    │           ├── speakers_info.json   # 至关重要：确保此文件是有效的 JSON 格式！
-    │           ├── 说话人名1_prompt.wav
-    │           └── ...                  # 其他说话人提示音频文件
+    │       ├── Model_Download.bat  <-- 请运行此脚本！
+    │       └── ... (其他包内文件)
     └── models/
         └── TTS/
-            └── Spark-TTS/
-            │   └── Spark-TTS-0.5B/      <-- 将下载的 Spark-TTS 模型文件夹放在此处
-            │       ├── BiCodec/
-            │       ├── LLM/
-            │       ├── wav2vec2-large-xlsr-53/
-            │       └── config.yaml
+            ├── Spark-TTS/
+            │   └── Spark-TTS-0.5B/    <-- Spark-TTS 模型文件夹
+            └── Speaker_Preset/        <-- Speaker_Preset 文件夹
+                ├── speakers_info.json 
+                └── ...                
     ```
+    *   `Speaker_Preset` 文件夹内的`speakers_info.json` 文件将说话人名称映射到其相应的提示文本。
+    *   提示音频文件应命名为 `{说话人名}_prompt.{扩展名}`。
     *   `ComfyUI_Spark_TTS` 节点包内的 `sparktts` 文件夹为官方 Spark-TTS 仓库复制。其所有子目录应包含一个 `__init__.py` 文件，以便被识别为 Python 包。
-    *   `Spark-TTS-Speakers` 文件夹现在是自定义节点包的一部分。如果您希望将说话人数据存储在其他位置，可以在 `Spark_TTS_Clone` 节点中覆盖此路径。
-    *   `Spark-TTS-Speakers` 文件夹内的`speakers_info.json` 文件将说话人名称（用于 `Spark_TTS_Clone` 节点中的下拉列表）映射到其相应的提示文本，可以自行增减。示例：
+    *   `speakers_info.json` 文件将说话人名称（用于 `Spark_TTS_Clone` 节点中的下拉列表）映射到其相应的提示文本，可以自行增减。示例：
         ```json
         {
             "爱丽丝": "这是爱丽丝声音的参考文本。",
