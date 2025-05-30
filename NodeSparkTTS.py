@@ -39,6 +39,19 @@ import torchaudio
 current_node_directory = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, current_node_directory)
 
+# --- Import model download module ---
+spark_tts_model_downloader = None
+try:
+    from .model_download import model_download as imported_model_downloader
+    spark_tts_model_downloader = imported_model_downloader
+    if hasattr(spark_tts_model_downloader, 'ensure_download_packages'):
+        spark_tts_model_downloader.ensure_download_packages()
+except ImportError as e:
+    logger.warning(f"[ComfyUI_Spark_TTS] Warning: Could not import model_download module: {e}. Automatic model download will not be available from the node.")
+except Exception as e:
+    logger.error(f"[ComfyUI_Spark_TTS] Error during model_download package check: {e}")
+# --- END MODIFICATION ---
+
 from sparktts.utils.file import load_config as spark_load_config
 from sparktts.models.audio_tokenizer import BiCodecTokenizer as SparkBiCodecTokenizer
 from sparktts.utils.token_parser import (
@@ -50,9 +63,18 @@ from sparktts.utils.token_parser import (
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
+# --- Global Path and Status Variables ---
 _SPARK_MODEL_DIR_GLOBAL: Optional[str] = None
 _SPEAKERS_DATA_DIR_GLOBAL: Optional[str] = None
 _SPEAKERS_INFO_FILE_GLOBAL: Optional[str] = None
+_MODELS_PRESENT_FOR_UI_STATUS: bool = False # Controls if UI dropdowns show real options or download placeholder
+_DOWNLOAD_ATTEMPTED_THIS_SESSION: bool = False # Flag to prevent repeated download calls within one ComfyUI session
+
+# --- UI Placeholder Constants ---
+DOWNLOAD_PLACEHOLDER_TEXT = "Run to download data / 运行以下载数据"
+DOWNLOAD_PLACEHOLDER_TOOLTIP_CREATION = "The model will be auto-downloaded for the first time. After completed, refresh the page to load the model. 首次运行节点会自动下载模型，下载完成后刷新页面以加载模型。"
+DOWNLOAD_PLACEHOLDER_TOOLTIP_CLONE_SPEAKER = "Data will be auto-downloaded for the first time. After completed, refresh the page to reload the list. 首次运行节点会自动下载数据，下载完成后刷新页面以加载列表。"
+
 
 def _get_module_device(module: Optional[torch.nn.Module]) -> Optional[torch.device]:
     if module is None:
@@ -69,25 +91,96 @@ def _get_module_device(module: Optional[torch.nn.Module]) -> Optional[torch.devi
         logger.warning(f"Could not determine device for module {type(module).__name__}: {e}")
         return None
 
-def _initialize_global_paths(): # Removed override parameters
-    global _SPARK_MODEL_DIR_GLOBAL, _SPEAKERS_DATA_DIR_GLOBAL, _SPEAKERS_INFO_FILE_GLOBAL
+def _initialize_and_check_paths():
+    global _SPARK_MODEL_DIR_GLOBAL, _SPEAKERS_DATA_DIR_GLOBAL, _SPEAKERS_INFO_FILE_GLOBAL, _MODELS_PRESENT_FOR_UI_STATUS, _DOWNLOAD_ATTEMPTED_THIS_SESSION
     
-    comfyui_root_path_for_defaults = Path(folder_paths.base_path)
+    # Determine ComfyUI root path safely
+    comfyui_root_path_for_defaults = None
+    try:
+        if hasattr(folder_paths, 'base_path') and folder_paths.base_path is not None:
+            comfyui_root_path_for_defaults = Path(folder_paths.base_path)
+        else:
+             logger.warning("[ComfyUI_Spark_TTS] folder_paths.base_path is not set. Attempting fallback to find ComfyUI root.")
+             search_dir = Path(current_node_directory).parent.parent
+             for _ in range(5):
+                 if (search_dir / "main.py").exists() or (search_dir / "models").is_dir() and (search_dir / "custom_nodes").is_dir():
+                     comfyui_root_path_for_defaults = search_dir
+                     break
+                 if search_dir.parent == search_dir:
+                     break
+                 search_dir = search_dir.parent
+             if comfyui_root_path_for_defaults is None:
+                 logger.error("[ComfyUI_Spark_TTS] Failed to determine ComfyUI root directory. Cannot set default model paths.")
+                 _SPARK_MODEL_DIR_GLOBAL = None
+                 _SPEAKERS_DATA_DIR_GLOBAL = None
+                 _SPEAKERS_INFO_FILE_GLOBAL = None
+                 _MODELS_PRESENT_FOR_UI_STATUS = False
+                 return
+    except Exception as e:
+        logger.error(f"[ComfyUI_Spark_TTS] Error determining ComfyUI root path: {e}", exc_info=True)
+        _SPARK_MODEL_DIR_GLOBAL = None
+        _SPEAKERS_DATA_DIR_GLOBAL = None
+        _SPEAKERS_INFO_FILE_GLOBAL = None
+        _MODELS_PRESENT_FOR_UI_STATUS = False
+        return
 
-    # --- Model Path Handling ---
     default_model_dir = str(comfyui_root_path_for_defaults / "models" / "TTS" / "Spark-TTS" / "Spark-TTS-0.5B")
-    if _SPARK_MODEL_DIR_GLOBAL is None or _SPARK_MODEL_DIR_GLOBAL != default_model_dir : # Initialize or update if logic changes
-        logger.info(f"Setting Spark-TTS Model Dir to default: {default_model_dir}")
+    if _SPARK_MODEL_DIR_GLOBAL != default_model_dir:
         _SPARK_MODEL_DIR_GLOBAL = default_model_dir
+        logger.info(f"[ComfyUI_Spark_TTS] Spark-TTS Model Directory set to: {_SPARK_MODEL_DIR_GLOBAL}")
     
-    # --- Speaker Preset Path Handling ---
     default_speakers_dir = str(comfyui_root_path_for_defaults / "models" / "TTS" / "Speaker_Preset")
-    if _SPEAKERS_DATA_DIR_GLOBAL is None or _SPEAKERS_DATA_DIR_GLOBAL != default_speakers_dir: # Initialize or update
-        logger.info(f"Setting Speaker Preset Dir to default: {default_speakers_dir}")
+    if _SPEAKERS_DATA_DIR_GLOBAL != default_speakers_dir:
         _SPEAKERS_DATA_DIR_GLOBAL = default_speakers_dir
+        logger.info(f"[ComfyUI_Spark_TTS] Speaker Preset Directory set to: {_SPEAKERS_DATA_DIR_GLOBAL}")
     
     if _SPEAKERS_DATA_DIR_GLOBAL:
         _SPEAKERS_INFO_FILE_GLOBAL = os.path.join(_SPEAKERS_DATA_DIR_GLOBAL, "speakers_info.json")
+
+    current_model_files_exist = Path(_SPARK_MODEL_DIR_GLOBAL).is_dir() and any(Path(_SPARK_MODEL_DIR_GLOBAL).iterdir())
+    current_speaker_files_exist = Path(_SPEAKERS_DATA_DIR_GLOBAL).is_dir() and Path(_SPEAKERS_INFO_FILE_GLOBAL).is_file() and any(Path(_SPEAKERS_DATA_DIR_GLOBAL).iterdir())
+
+    _MODELS_PRESENT_FOR_UI_STATUS = current_model_files_exist and current_speaker_files_exist
+
+    if not _MODELS_PRESENT_FOR_UI_STATUS and not _DOWNLOAD_ATTEMPTED_THIS_SESSION:
+        logger.info("[ComfyUI_Spark_TTS] Required models/data are missing. Attempting automatic download...")
+        if spark_tts_model_downloader and hasattr(spark_tts_model_downloader, 'main'):
+            try:
+                paths_to_check = {
+                    "Spark-TTS-0.5B Model": _SPARK_MODEL_DIR_GLOBAL,
+                    "Speaker Presets": _SPEAKERS_DATA_DIR_GLOBAL
+                }
+                
+                models_seem_missing = False
+                for name, path_to_check in paths_to_check.items():
+                    if not path_to_check or not Path(path_to_check).exists() or not any(Path(path_to_check).iterdir()):
+                        logger.info(f"[ComfyUI_Spark_TTS] {name} directory ('{path_to_check}') appears missing or empty.")
+                        models_seem_missing = True
+                        break
+                
+                if models_seem_missing:
+                    logger.info("[ComfyUI_Spark_TTS] Attempting automatic download via model_download.py...")
+                    spark_tts_model_downloader.main() 
+                    _DOWNLOAD_ATTEMPTED_THIS_SESSION = True
+                    current_model_files_exist = Path(_SPARK_MODEL_DIR_GLOBAL).is_dir() and any(Path(_SPARK_MODEL_DIR_GLOBAL).iterdir())
+                    current_speaker_files_exist = Path(_SPEAKERS_DATA_DIR_GLOBAL).is_dir() and Path(_SPEAKERS_INFO_FILE_GLOBAL).is_file() and any(Path(_SPEAKERS_DATA_DIR_GLOBAL).iterdir())
+                    _MODELS_PRESENT_FOR_UI_STATUS = current_model_files_exist and current_speaker_files_exist
+                    if _MODELS_PRESENT_FOR_UI_STATUS:
+                        logger.info("[ComfyUI_Spark_TTS] Automatic download completed successfully. Please refresh ComfyUI page to load models.")
+                    else:
+                        logger.error("[ComfyUI_Spark_TTS] Automatic download finished, but models/data still seem missing. Please check logs and run Model_Download.bat manually.")
+                else:
+                    logger.info("[ComfyUI_Spark_TTS] Essential model/data directories seem present.")
+                _DOWNLOAD_ATTEMPTED_THIS_SESSION = True
+            except Exception as e:
+                logger.error(f"[ComfyUI_Spark_TTS] Automatic model download failed: {e}", exc_info=True)
+                logger.error("Please run Model_Download.bat manually or check your internet connection and permissions.")
+                _DOWNLOAD_ATTEMPTED_THIS_SESSION = True
+        else:
+            logger.warning("[ComfyUI_Spark_TTS] Model downloader module not available. Skipping automatic download. Please use Model_Download.bat (Windows) or run model_download/model_download.py manually.")
+            _DOWNLOAD_ATTEMPTED_THIS_SESSION = True
+    elif not _MODELS_PRESENT_FOR_UI_STATUS and _DOWNLOAD_ATTEMPTED_THIS_SESSION:
+        logger.info("[ComfyUI_Spark_TTS] Models/data still missing after a previous download attempt this session. Please refresh page or run Model_Download.bat.")
 
 
 if platform.system() == "Darwin" and torch.backends.mps.is_available():
@@ -132,14 +225,14 @@ def ensure_models_loaded(device_to_use: torch.device, model_path_for_loading: st
         unload_all_models() 
 
     logger.info(f"Loading Spark-TTS models from: {model_path_for_loading}")
-    if not model_path_for_loading or not os.path.exists(model_path_for_loading):
-        logger.error(f"Spark-TTS model directory not found: {model_path_for_loading}")
-        raise FileNotFoundError(f"Spark-TTS model directory not found: {model_path_for_loading}. Please check path with Model_Download.bat.")
+    if not model_path_for_loading or not os.path.isdir(model_path_for_loading):
+        logger.error(f"Spark-TTS model directory not found or is not a directory: {model_path_for_loading}")
+        raise FileNotFoundError(f"Spark-TTS model directory not found: {model_path_for_loading}. Please run Model_Download.bat or check paths.")
     
     llm_model_subpath = os.path.join(model_path_for_loading, "LLM")
-    if not os.path.exists(llm_model_subpath):
+    if not os.path.isdir(llm_model_subpath):
         logger.error(f"LLM subdirectory not found in Spark-TTS model directory: {llm_model_subpath}")
-        raise FileNotFoundError(f"LLM subdirectory not found in {model_path_for_loading}. Model might be incomplete.")
+        raise FileNotFoundError(f"LLM subdirectory not found in {model_path_for_loading}. Model files might be incomplete or in the wrong structure. Please check afrer running Model_Download.bat.")
 
     try:
         _global_tokenizer = AutoTokenizer.from_pretrained(llm_model_subpath)
@@ -151,7 +244,7 @@ def ensure_models_loaded(device_to_use: torch.device, model_path_for_loading: st
     except Exception as e:
         logger.error(f"Error loading Spark-TTS models: {e}", exc_info=True)
         unload_all_models()
-        raise RuntimeError(f"Failed to load Spark-TTS models from {model_path_for_loading}. Details: {e}") from e
+        raise RuntimeError(f"Failed to load Spark-TTS models from {model_path_for_loading}. Details: {e}. Ensure models are correctly downloaded using Model_Download.bat.") from e
 
 def unload_all_models():
     global _global_tokenizer, _global_model, _global_audio_tokenizer, _current_loaded_model_path
@@ -194,7 +287,7 @@ class SparkTTSCoreLogic:
         try:
             config_path = self.model_base_path / "config.yaml"
             if not config_path.exists():
-                raise FileNotFoundError(f"config.yaml not found in {self.model_base_path}")
+                raise FileNotFoundError(f"config.yaml not found in {self.model_base_path}. Ensure models are correctly downloaded.")
             self.configs = spark_load_config(config_path)
             self.sample_rate = self.configs["sample_rate"]
         except Exception as e:
@@ -277,6 +370,7 @@ class SparkTTSCoreLogic:
         output_ids_only = generated_ids_tensor[:, input_ids_len:]
         
         predicted_tokens_str = self.tokenizer.batch_decode(output_ids_only, skip_special_tokens=False)[0]
+        logger.debug(f"Full predicted tokens string (with special tokens) for semantic search: {predicted_tokens_str[:500]}...")
         
         semantic_ids_list = [
             int(m.group(1) or m.group(2))
@@ -284,8 +378,17 @@ class SparkTTSCoreLogic:
         ]
         
         if not semantic_ids_list:
-            logger.warning("No semantic tokens (bicodec_semantic_X) found. Output might be empty/incorrect.")
+            logger.debug("Primary semantic token regex found no matches. Trying on string without special tokens...")
+            predicted_tokens_str_no_specials = self.tokenizer.batch_decode(output_ids_only, skip_special_tokens=True)[0]
+            semantic_ids_list = [
+                int(token_id_str) for token_id_str in re.findall(r"bicodec_semantic_(\d+)", predicted_tokens_str_no_specials)
+            ]
+
+        if not semantic_ids_list:
+            logger.warning("No semantic tokens (bicodec_semantic_X) found after all attempts. Output might be empty/incorrect.")
             return np.array([], dtype=np.float32)
+        
+        logger.debug(f"Found semantic_ids_list: {semantic_ids_list[:10]}...") 
         pred_semantic_ids = torch.tensor(semantic_ids_list, dtype=torch.long, device=self.device).unsqueeze(0)
 
         if gender and global_token_ids_for_detokenize is None: 
@@ -293,6 +396,10 @@ class SparkTTSCoreLogic:
                 int(m.group(1) or m.group(2))
                 for m in re.finditer(r"<\|bicodec_global_(\d+)\|>|bicodec_global_(\d+)", predicted_tokens_str)
             ]
+            if not global_ids_list:
+                predicted_tokens_str_no_specials_g = self.tokenizer.batch_decode(output_ids_only, skip_special_tokens=True)[0]
+                global_ids_list = [int(token_id_str) for token_id_str in re.findall(r"bicodec_global_(\d+)", predicted_tokens_str_no_specials_g)]
+
             if not global_ids_list:
                 logger.warning("No global tokens (bicodec_global_X) found in controllable synthesis. This may lead to issues.")
                 global_token_ids_for_detokenize = torch.empty((1, 0, 0), dtype=torch.long, device=self.device)
@@ -324,31 +431,60 @@ class Spark_TTS_Creation:
 
     @classmethod
     def INPUT_TYPES(cls):
-        _initialize_global_paths() # Ensures paths are set based on defaults
-        return {
-            "required": {
-                "text": ("STRING", {"default": "Hello, Spark Text to Speech is working!", "multiline": True}),
-                # "model_path_override" removed from UI
-                "gender": (list(SPARK_GENDER_MAP.keys()), {"default": "female"}),
-                "pitch": (list(SPARK_LEVELS_MAP.keys()), {"default": "moderate"}),
-                "speed": (list(SPARK_LEVELS_MAP.keys()), {"default": "moderate"}),
-                "temperature": ("FLOAT", {"default": 0.8, "min": 0.0, "max": 1.0, "step": 0.05}),
-                "top_k": ("INT", {"default": 50, "min": 0, "max": 100, "step": 1}),
-                "top_p": ("FLOAT", {"default": 0.90, "min": 0.0, "max": 1.0, "step": 0.01}),
-                "max_new_tokens": ("INT", {"default": 6000, "min": 100, "max": 90000, "step": 64}),
-                "keep_model_loaded": ("BOOLEAN", {"default": True, "label_on": "Keep Model Loaded", "label_off": "Unload Model After Use"}),
+        _initialize_and_check_paths() 
+        
+        gender_options = list(SPARK_GENDER_MAP.keys())
+        default_gender_value = gender_options[0] # "female" as default for the actual value
+
+        if not _MODELS_PRESENT_FOR_UI_STATUS:
+            # If models are not present, show placeholder for 'gender' dropdown
+            return {
+                "required": {
+                    "text": ("STRING", {"default": "Hello, Spark Text to Speech is working!", "multiline": True, "tooltip": "Text to be synthesized / 待合成的文本"}),
+                    "gender": ([DOWNLOAD_PLACEHOLDER_TEXT], {"default": default_gender_value, "tooltip": DOWNLOAD_PLACEHOLDER_TOOLTIP_CREATION}),
+                    "pitch": (list(SPARK_LEVELS_MAP.keys()), {"default": "moderate", "tooltip": "Pitch level (e.g., very_low, moderate, very_high) / 音高水平（例如：非常低、中等、非常高）"}),
+                    "speed": (list(SPARK_LEVELS_MAP.keys()), {"default": "moderate", "tooltip": "Speed level (e.g., very_low, moderate, very_high) / 语速水平（例如：非常慢、中等、非常快）"}),
+                    "temperature": ("FLOAT", {"default": 0.8, "min": 0.0, "max": 1.0, "step": 0.05, "tooltip": "Sampling temperature for generation / 生成的采样温度"}),
+                    "top_k": ("INT", {"default": 50, "min": 0, "max": 100, "step": 1, "tooltip": "Top-K sampling parameter / Top-K 采样参数"}),
+                    "top_p": ("FLOAT", {"default": 0.90, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "Top-P (nucleus) sampling parameter / Top-P (核) 采样参数"}),
+                    "max_new_tokens": ("INT", {"default": 6000, "min": 100, "max": 90000, "step": 64, "tooltip": "Maximum number of new tokens to generate / 要生成的最大新 token 数"}),
+                    "keep_model_loaded": ("BOOLEAN", {"default": True, "label_on": "Keep Model Loaded", "label_off": "Unload Model After Use", "tooltip": "Keep model in VRAM after use for faster subsequent runs / 使用后将模型保留在显存中以便后续运行更快"}),
+                }
             }
-        }
+        else:
+            # Models are present, show actual gender options
+            return {
+                "required": {
+                    "text": ("STRING", {"default": "Hello, Spark Text to Speech is working!", "multiline": True, "tooltip": "Text to be synthesized / 待合成的文本"}),
+                    "gender": (gender_options, {"default": default_gender_value, "tooltip": "Gender of the synthesized voice / 合成语音的性别"}),
+                    "pitch": (list(SPARK_LEVELS_MAP.keys()), {"default": "moderate", "tooltip": "Pitch level (e.g., very_low, moderate, very_high) / 音高水平（例如：非常低、中等、非常高）"}),
+                    "speed": (list(SPARK_LEVELS_MAP.keys()), {"default": "moderate", "tooltip": "Speed level (e.g., very_low, moderate, very_high) / 语速水平（例如：非常慢、中等、非常快）"}),
+                    "temperature": ("FLOAT", {"default": 0.8, "min": 0.0, "max": 1.0, "step": 0.05, "tooltip": "Sampling temperature for generation / 生成的采样温度"}),
+                    "top_k": ("INT", {"default": 50, "min": 0, "max": 100, "step": 1, "tooltip": "Top-K sampling parameter / Top-K 采样参数"}),
+                    "top_p": ("FLOAT", {"default": 0.90, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "Top-P (nucleus) sampling parameter / Top-P (核) 采样参数"}),
+                    "max_new_tokens": ("INT", {"default": 6000, "min": 100, "max": 90000, "step": 64, "tooltip": "Maximum number of new tokens to generate / 要生成的最大新 token 数"}),
+                    "keep_model_loaded": ("BOOLEAN", {"default": True, "label_on": "Keep Model Loaded", "label_off": "Unload Model After Use", "tooltip": "Keep model in VRAM after use for faster subsequent runs / 使用后将模型保留在显存中以便后续运行更快"}),
+                }
+            }
+
     RETURN_TYPES = ("AUDIO", "STRING",)
     RETURN_NAMES = ("Audio", "Node Status",)
     FUNCTION = "generate_speech"
     CATEGORY = "ComfyUI_Spark_TTS"
+    # Tooltips for Outputs
+    @classmethod
+    def IS_CHANGED(s, **kwargs): # For tooltip of outputs
+        return ""
+    @classmethod
+    def VALIDATE_INPUTS(s, **kwargs): # For tooltip of outputs
+        return True
+
 
     def generate_speech(self, text: str, gender: str, pitch: str, speed: str,
                         temperature: float, top_k: int, top_p: float, max_new_tokens: int,
                         keep_model_loaded: bool):
         
-        _initialize_global_paths() # No override string passed
+        _initialize_and_check_paths() 
         
         node_status = "Initializing..."
         final_sample_rate = 16000 
@@ -377,7 +513,7 @@ class Spark_TTS_Creation:
                 node_status = "Error: Synthesis resulted in empty audio (no semantic tokens found)."
                 logger.error(node_status)
                 error_audio_tensor = torch.zeros((1, 1, int(final_sample_rate * 0.1)), dtype=torch.float32)
-                return ({"waveform": error_audio_tensor, "sample_rate": final_sample_rate}, node_status)
+                return ({"waveform": error_audio_tensor, "sample_rate": final_sample_rate}, f"Error: {node_status}")
             
             node_status = "Success"
         except Exception as e:
@@ -400,12 +536,16 @@ class Spark_TTS_Clone:
         self.available_speakers: Dict[str, str] = {} 
 
     def _refresh_speaker_list_from_path(self, speakers_dir_path: Optional[str]) -> List[str]:
-        speaker_names_list = ["(No speakers directory specified)"]
+        speaker_names_list = [] # Start with empty list to populate
         current_speakers_info_file = None
 
         if speakers_dir_path and os.path.isdir(speakers_dir_path):
             current_speakers_info_file = os.path.join(speakers_dir_path, "speakers_info.json")
-        
+        else:
+            logger.warning(f"Speaker preset directory not found or not specified: {speakers_dir_path}")
+            self.available_speakers = {}
+            return ["(No speakers directory found)"]
+
         if current_speakers_info_file and os.path.exists(current_speakers_info_file):
             try:
                 with open(current_speakers_info_file, "r", encoding="utf-8") as f:
@@ -420,49 +560,90 @@ class Spark_TTS_Clone:
                 logger.error(f"Could not populate speaker list from {current_speakers_info_file}: {e}", exc_info=True)
                 self.available_speakers = {"(Error)": f"Could not load {current_speakers_info_file}"}
                 speaker_names_list = [f"(Error loading {os.path.basename(current_speakers_info_file)})"]
-        elif speakers_dir_path: 
-            speaker_names_list = [f"(speakers_info.json not found in {os.path.basename(speakers_dir_path)})"]
+        else: # Directory exists, but no json
+            logger.warning(f"speakers_info.json not found in {speakers_dir_path}")
+            self.available_speakers = {}
+            speaker_names_list = [f"(speakers_info.json not found in {os.path.basename(str(speakers_dir_path))})"]
         
         return speaker_names_list
         
     @classmethod
     def INPUT_TYPES(cls):
-        _initialize_global_paths() # Ensures paths are set based on defaults
+        _initialize_and_check_paths() 
         
         temp_instance = cls()
-        speaker_names = temp_instance._refresh_speaker_list_from_path(_SPEAKERS_DATA_DIR_GLOBAL)
-
-        return {
-            "required": {
-                "text": ("STRING", {"default": "Cloning a voice with Spark TTS is interesting.", "multiline": True}),
-                "custom_prompt_text": ("STRING", {"multiline": True, "default": "", "placeholder": "Text for Audio reference (optional )"}),
-                # "model_path_override" removed from UI
-                # "speakers_path_override" removed from UI
-                "speaker_preset": (speaker_names, {"default": speaker_names[0] if speaker_names and not speaker_names[0].startswith("(") else ""}),
-                "pitch": (list(SPARK_LEVELS_MAP.keys()), {"default": "moderate"}), 
-                "speed": (list(SPARK_LEVELS_MAP.keys()), {"default": "moderate"}), 
-                "temperature": ("FLOAT", {"default": 0.8, "min": 0.0, "max": 1.0, "step": 0.05}),
-                "top_k": ("INT", {"default": 50, "min": 0, "max": 100, "step": 1}),
-                "top_p": ("FLOAT", {"default": 0.90, "min": 0.0, "max": 1.0, "step": 0.01}),
-                "max_new_tokens": ("INT", {"default": 6000, "min": 100, "max": 90000, "step": 64}),
-                "keep_model_loaded": ("BOOLEAN", {"default": True, "label_on": "Keep Model Loaded", "label_off": "Unload Model After Use"}),
-            },
-            "optional": { 
-                "Audio_reference": ("AUDIO",), 
+        actual_speaker_names = temp_instance._refresh_speaker_list_from_path(_SPEAKERS_DATA_DIR_GLOBAL)
+        
+        # Determine the default speaker name for the actual value passed to the function.
+        # This should be a valid speaker name from your preset list (e.g., "ad_male_en")
+        # to ensure the node can run even if UI shows placeholder.
+        # Pick one that is likely to be present in your Speaker_Preset/speakers_info.json.
+        default_speaker_value = "ad_male_en" 
+        if default_speaker_value not in actual_speaker_names and actual_speaker_names and not actual_speaker_names[0].startswith("("):
+            default_speaker_value = actual_speaker_names[0] # Fallback to first available if preferred default not found
+        elif not actual_speaker_names or actual_speaker_names[0].startswith("("):
+            default_speaker_value = "default_placeholder_speaker_name" # Placeholder for internal value if no real speakers at all
+            
+        
+        # If models are not present for UI, show download placeholder
+        if not _MODELS_PRESENT_FOR_UI_STATUS:
+            speaker_options_for_ui = [DOWNLOAD_PLACEHOLDER_TEXT]
+            return {
+                "required": {
+                    "text": ("STRING", {"default": "Cloning a voice with Spark TTS is interesting.", "multiline": True, "tooltip": "Text to be synthesized / 待合成的文本"}),
+                    "custom_prompt_text": ("STRING", {"multiline": True, "default": "", "placeholder": "Text for Audio reference (optional )", "tooltip": "Optional text transcription for the custom audio reference, improves cloning accuracy / 自定义参考音频的文本转录（可选），提高克隆准确性"}),
+                    "speaker_preset": (speaker_options_for_ui, {"default": default_speaker_value, "tooltip": DOWNLOAD_PLACEHOLDER_TOOLTIP_CLONE_SPEAKER}),
+                    "pitch": (list(SPARK_LEVELS_MAP.keys()), {"default": "moderate", "tooltip": "Output voice pitch level (e.g., moderate) / 输出语音的音高水平（例如：中等）"}), 
+                    "speed": (list(SPARK_LEVELS_MAP.keys()), {"default": "moderate", "tooltip": "Output voice speed level (e.g., moderate) / 输出语音的语速水平（例如：中等）"}), 
+                    "temperature": ("FLOAT", {"default": 0.8, "min": 0.0, "max": 1.0, "step": 0.05, "tooltip": "Sampling temperature for generation / 生成的采样温度"}),
+                    "top_k": ("INT", {"default": 50, "min": 0, "max": 100, "step": 1, "tooltip": "Top-K sampling parameter / Top-K 采样参数"}),
+                    "top_p": ("FLOAT", {"default": 0.90, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "Top-P (nucleus) sampling parameter / Top-P (核) 采样参数"}),
+                    "max_new_tokens": ("INT", {"default": 6000, "min": 100, "max": 90000, "step": 64, "tooltip": "Maximum number of new tokens to generate / 要生成的最大新 token 数"}),
+                    "keep_model_loaded": ("BOOLEAN", {"default": True, "label_on": "Keep Model Loaded", "label_off": "Unload Model After Use", "tooltip": "Keep model in VRAM after use for faster subsequent runs / 使用后将模型保留在显存中以便后续运行更快"}),
+                },
+                "optional": { 
+                    "Audio_reference": ("AUDIO", {"tooltip": "Custom audio file for voice cloning. Overrides 'speaker_preset' / 用于语音克隆的自定义音频文件。会覆盖 'speaker_preset' "}), 
+                }
             }
-        }
+        else:
+            # Models are present, show actual speaker list
+            return {
+                "required": {
+                    "text": ("STRING", {"default": "Cloning a voice with Spark TTS is interesting.", "multiline": True, "tooltip": "Text to be synthesized / 待合成的文本"}),
+                    "custom_prompt_text": ("STRING", {"multiline": True, "default": "", "placeholder": "Text for Audio reference (optional )", "tooltip": "Optional text transcription for the custom audio reference, improves cloning accuracy / 自定义参考音频的文本转录（可选），提高克隆准确性"}),
+                    "speaker_preset": (actual_speaker_names, {"default": default_speaker_value, "tooltip": "Select a preset speaker for cloning / 选择一个预设说话人进行克隆"}),
+                    "pitch": (list(SPARK_LEVELS_MAP.keys()), {"default": "moderate", "tooltip": "Output voice pitch level (e.g., moderate). Effect depends on cloning strength / 输出语音的音高水平（例如：中等）。效果取决于克隆强度"}), 
+                    "speed": (list(SPARK_LEVELS_MAP.keys()), {"default": "moderate", "tooltip": "Output voice speed level (e.g., moderate). Effect depends on cloning strength / 输出语音的语速水平（例如：中等）。效果取决于克隆强度"}), 
+                    "temperature": ("FLOAT", {"default": 0.8, "min": 0.0, "max": 1.0, "step": 0.05, "tooltip": "Sampling temperature for generation / 生成的采样温度"}),
+                    "top_k": ("INT", {"default": 50, "min": 0, "max": 100, "step": 1, "tooltip": "Top-K sampling parameter / Top-K 采样参数"}),
+                    "top_p": ("FLOAT", {"default": 0.90, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "Top-P (nucleus) sampling parameter / Top-P (核) 采样参数"}),
+                    "max_new_tokens": ("INT", {"default": 6000, "min": 100, "max": 90000, "step": 64, "tooltip": "Maximum number of new tokens to generate / 要生成的最大新 token 数"}),
+                    "keep_model_loaded": ("BOOLEAN", {"default": True, "label_on": "Keep Model Loaded", "label_off": "Unload Model After Use", "tooltip": "Keep model in VRAM after use for faster subsequent runs / 使用后将模型保留在显存中以便后续运行更快"}),
+                },
+                "optional": { 
+                    "Audio_reference": ("AUDIO", {"tooltip": "Custom audio file for voice cloning. Overrides 'speaker_preset' / 用于语音克隆的自定义音频文件。会覆盖 'speaker_preset' "}), 
+                }
+            }
+
     RETURN_TYPES = ("AUDIO", "STRING",)
     RETURN_NAMES = ("Audio", "Node Status",)
     FUNCTION = "clone_voice"
     CATEGORY = "ComfyUI_Spark_TTS"
+    # Tooltips for Outputs
+    @classmethod
+    def IS_CHANGED(s, **kwargs):
+        return ""
+    @classmethod
+    def VALIDATE_INPUTS(s, **kwargs):
+        return True
 
     def clone_voice(self, text: str, custom_prompt_text: str,
-                    speaker_preset: str, pitch: str, speed: str, # Removed path overrides from parameters
+                    speaker_preset: str, pitch: str, speed: str,
                     temperature: float, top_k: int, top_p: float, max_new_tokens: int,
                     keep_model_loaded: bool,
                     Audio_reference: Optional[Dict[str, Any]] = None): 
         
-        _initialize_global_paths() # No override strings passed
+        _initialize_and_check_paths() 
         self._refresh_speaker_list_from_path(_SPEAKERS_DATA_DIR_GLOBAL) 
 
         node_status = "Initializing..."
@@ -478,8 +659,16 @@ class Spark_TTS_Clone:
             error_msg = f"Model path is invalid or not configured: '{current_model_path_to_load}'. Please run Model_Download.bat or check paths."
             logger.error(error_msg)
             return ({"waveform": torch.zeros(1, 1, 1), "sample_rate": final_sample_rate}, f"Error: {error_msg}")
-        if not current_speakers_path or not os.path.isdir(current_speakers_path):
-            logger.warning(f"Speaker Preset path is invalid or not configured: '{current_speakers_path}'. Presets might not work. Please run Model_Download.bat.")
+        
+        # Determine if we are *actually* trying to use a preset, not just displaying the placeholder
+        using_preset = speaker_preset and speaker_preset != DOWNLOAD_PLACEHOLDER_TEXT and not Audio_reference
+        
+        if using_preset and (not current_speakers_path or not os.path.isdir(current_speakers_path)):
+            error_msg = f"Speaker Preset path is invalid or not configured: '{current_speakers_path}'. Presets cannot be used. Please run Model_Download.bat or provide Audio_reference."
+            logger.error(error_msg)
+            return ({"waveform": torch.zeros(1, 1, 1), "sample_rate": final_sample_rate}, f"Error: {error_msg}")
+        elif not current_speakers_path or not os.path.isdir(current_speakers_path) : 
+             logger.warning(f"Speaker Preset path is invalid or not configured: '{current_speakers_path}'. Presets might not work. Please run Model_Download.bat.")
 
 
         try:
@@ -505,10 +694,10 @@ class Spark_TTS_Clone:
                 torchaudio.save(temp_audio_file_path, wf_to_save.cpu(), audio_sample_rate)
                 prompt_audio_path_obj = Path(temp_audio_file_path)
                 effective_prompt_text = custom_prompt_text if custom_prompt_text and custom_prompt_text.strip() else None
-            elif speaker_preset and not speaker_preset.startswith("("): 
+            elif using_preset:
                 logger.info(f"Using preset speaker: {speaker_preset}")
                 node_status = f"Using preset speaker: {speaker_preset}... "
-                if not current_speakers_path or not os.path.isdir(current_speakers_path): # Should be caught above, but double check
+                if not current_speakers_path or not os.path.isdir(current_speakers_path): 
                     raise FileNotFoundError(f"Speaker Preset path '{current_speakers_path}' is invalid. Please run Model_Download.bat or check paths.")
 
                 if speaker_preset not in self.available_speakers:
@@ -526,7 +715,7 @@ class Spark_TTS_Clone:
                     raise FileNotFoundError(f"Prompt audio file for '{speaker_preset}' not found in {current_speakers_path} with common extensions.")
                 effective_prompt_text = self.available_speakers[speaker_preset]
             else:
-                raise ValueError("No valid speaker preset or custom audio reference provided.")
+                raise ValueError("No valid speaker preset or custom audio reference provided (or download in progress).")
 
             node_status += "Synthesizing..."
             wav_array = self.tts_core_instance.synthesize(
@@ -538,7 +727,7 @@ class Spark_TTS_Clone:
                 node_status += " Error: Synthesis resulted in empty audio (no semantic tokens found)."
                 logger.error(node_status)
                 error_audio_tensor = torch.zeros((1, 1, int(final_sample_rate * 0.1)), dtype=torch.float32)
-                return ({"waveform": error_audio_tensor, "sample_rate": final_sample_rate}, node_status)
+                return ({"waveform": error_audio_tensor, "sample_rate": final_sample_rate}, f"Error: {node_status}")
             
             node_status = "Success." 
         except Exception as e:

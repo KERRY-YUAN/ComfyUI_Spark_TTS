@@ -72,28 +72,37 @@ A custom node package for ComfyUI that integrates the powerful Spark-TTS text-to
 
 ## 📥 Model and Data Setup
 
-The Spark-TTS model and Speaker Preset data **must be placed in specific default locations** for the nodes to function correctly. Please use the `Model_Download.bat` script provided with this node package to download and place them automatically, or manually place them as described below.
+The Spark-TTS model and Speaker Preset data **must be placed in specific default locations** for the nodes to function correctly. The node will attempt to automatically download any missing models/data when it's first used in a workflow.
 
-1.  **Spark-TTS 0.5B Model Location:**
-    The `Spark-TTS-0.5B` model folder must be located at:
+If the automatic download fails, or if you prefer to download them manually beforehand, you can run the `Model_Download.bat` script located in the `ComfyUI_Spark_TTS` custom node directory.
+
+1.  **Default Spark-TTS 0.5B Model Location:**
     `ComfyUI/models/TTS/Spark-TTS/Spark-TTS-0.5B/`
-    You can download it from its [Hugging Face page (SparkAudio/Spark-TTS-0.5B)](https://huggingface.co/SparkAudio/Spark-TTS-0.5B).
+    (Downloaded from [Hugging Face SparkAudio/Spark-TTS-0.5B](https://huggingface.co/SparkAudio/Spark-TTS-0.5B))
 	
-2.  **Speaker Preset Files Location:**
-    The `Speaker_Preset` folder (containing `speakers_info.json` and preset prompt audio files) must be located at:
+2.  **Default Speaker Preset Files Location:**
     `ComfyUI/models/TTS/Speaker_Preset/`
-    This folder and its contents can be downloaded using the `Model_Download.bat` script (which clones it from [KERRY-YUAN/Speaker_Preset on GitHub](https://github.com/KERRY-YUAN/Speaker_Preset)).
+    (Cloned from [GitHub KERRY-YUAN/Speaker_Preset](https://github.com/KERRY-YUAN/Speaker_Preset))
 
-3.  **Directory Structure Reference:**
+3.  **Using `Model_Download.bat`:**
+    Navigate to your `ComfyUI/custom_nodes/ComfyUI_Spark_TTS/` directory and run:
+    ```bash
+    .\Model_Download.bat
+    ```
+    This script requires `Git` to be installed and accessible in your system's PATH. It will also attempt to install Python packages like `gdown`, `huggingface_hub`, and `GitPython` if they are missing, using the Python environment it detects for ComfyUI (or system Python as a fallback).
+
+4.  **Directory Structure Reference (After Download):**
     The required final file structure is:
-
     ```
     ComfyUI/
     ├── custom_nodes/
     │   └── ComfyUI_Spark_TTS/
+    │       ├── model_download/
+    │       │   ├── model_download.py
+    │       │   └── model_list.json
     │       ├── sparktts/             
     │       ├── NodeSparkTTS.py
-    │       ├── Model_Download.bat  <-- Run this script!
+    │       ├── Model_Download.bat  <-- Run this script for manual/troubleshooting
     │       └── ... (other package files)
     └── models/
         └── TTS/
@@ -201,28 +210,37 @@ Please refer to the [LICENSE](LICENSE) file for details.
 
 ## 📥 模型和数据设置
 
-Spark-TTS 模型和说话人预设数据 **必须放置在特定的默认位置**，节点才能正常工作。请使用本节点包随附的 `Model_Download.bat` 脚本来自动下载和放置它们，或者按照下述说明手动放置。
+Spark-TTS 模型和说话人预设数据 **必须放置在特定的默认位置**，节点才能正常工作。当节点在工作流中首次使用时，它会尝试自动下载任何缺失的模型/数据。
 
-1.  **Spark-TTS 0.5B 模型位置：**
-    `Spark-TTS-0.5B` 模型文件夹必须位于：
+如果自动下载失败，或者您希望预先手动下载它们，可以运行位于 `ComfyUI_Spark_TTS` 自定义节点目录中的 `Model_Download.bat` 脚本。
+
+1.  **默认 Spark-TTS 0.5B 模型位置：**
     `ComfyUI/models/TTS/Spark-TTS/Spark-TTS-0.5B/`
-    您可以从其 [Hugging Face 页面 (SparkAudio/Spark-TTS-0.5B)](https://huggingface.co/SparkAudio/Spark-TTS-0.5B) 下载。
+    （从 [Hugging Face SparkAudio/Spark-TTS-0.5B](https://huggingface.co/SparkAudio/Spark-TTS-0.5B) 下载）
 	
-2.  **说话人预设文件位置：**
-    `Speaker_Preset` 文件夹（包含 `speakers_info.json` 和预设提示音频文件）必须位于：
+2.  **默认说话人预设文件位置：**
     `ComfyUI/models/TTS/Speaker_Preset/`
-    此文件夹及其内容可以使用 `Model_Download.bat` 脚本下载（它会从 [GitHub上的 KERRY-YUAN/Speaker_Preset](https://github.com/KERRY-YUAN/Speaker_Preset) 克隆）。
+    （从 [GitHub KERRY-YUAN/Speaker_Preset](https://github.com/KERRY-YUAN/Speaker_Preset) 克隆）
 
-3.  **目录结构参考：**
+3.  **使用 `Model_Download.bat`：**
+    导航到您的 `ComfyUI/custom_nodes/ComfyUI_Spark_TTS/` 目录并运行：
+    ```bash
+    .\Model_Download.bat
+    ```
+    此脚本需要您的系统中安装了 `Git` 并已将其添加到系统的 PATH 环境变量中。它还会尝试安装 Python 包如 `gdown`、`huggingface_hub` 和 `GitPython`（如果缺失），使用的是它为 ComfyUI 检测到的 Python 环境（或系统 Python 作为备选）。
+
+4.  **目录结构参考（下载后）：**
     必需的最终文件架构如下：
-
     ```
     ComfyUI/
     ├── custom_nodes/
     │   └── ComfyUI_Spark_TTS/
+    │       ├── model_download/
+    │       │   ├── model_download.py
+    │       │   └── model_list.json
     │       ├── sparktts/             
     │       ├── NodeSparkTTS.py
-    │       ├── Model_Download.bat  <-- 请运行此脚本！
+    │       ├── Model_Download.bat  <-- 可运行此脚本进行手动下载/故障排除
     │       └── ... (其他包内文件)
     └── models/
         └── TTS/

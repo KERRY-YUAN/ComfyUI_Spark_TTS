@@ -1,161 +1,173 @@
 @echo off
+chcp 65001 >nul  REM Set console to UTF-8 / 设置控制台编码为 UTF-8
 setlocal enabledelayedexpansion
 
-REM --- 配置 ---
+REM --- Configuration / 配置 ---
 set "SPARK_TTS_MODEL_URL=https://huggingface.co/SparkAudio/Spark-TTS-0.5B"
 set "SPEAKER_PRESET_REPO_URL=https://github.com/KERRY-YUAN/Speaker_Preset.git"
 
+echo ================================================================================
+echo ComfyUI Spark-TTS Model Downloader
+echo ComfyUI Spark-TTS 模型下载器
+echo ================================================================================
+echo.
+
+REM --- Determine script directory (ComfyUI_Spark_TTS node directory) ---
 REM --- 确定脚本所在目录 (ComfyUI_Spark_TTS 节点目录) ---
 set "NODE_DIR=%~dp0"
-REM 去掉末尾的反斜杠
 set "NODE_DIR=%NODE_DIR:~0,-1%"
 
-REM --- 尝试自动检测 ComfyUI 根目录 ---
-REM 逻辑：从节点目录向上查找，直到找到包含 "main.py" 或 "models" 文件夹的目录
+REM --- Determine ComfyUI root directory by looking for "main.py" or "models" folder ---
+REM --- 确定 ComfyUI 根目录 (通过查找 "main.py" 或 "models" 文件夹) ---
 set "COMFYUI_ROOT_DIR="
-set "CURRENT_CHECK_DIR=%NODE_DIR%"
-
-:find_comfyui_root_loop
-    REM 检查当前目录是否包含 main.py 或 models 文件夹
-    if exist "%CURRENT_CHECK_DIR%\main.py" (
-        set "COMFYUI_ROOT_DIR=%CURRENT_CHECK_DIR%"
+set "CURRENT_ASCEND_DIR=%NODE_DIR%"
+for /L %%i in (1,1,5) do ( REM Ascend up to 5 levels
+    if exist "%CURRENT_ASCEND_DIR%\main.py" (
+        set "COMFYUI_ROOT_DIR=%CURRENT_ASCEND_DIR%"
         goto found_comfyui_root
     )
-    if exist "%CURRENT_CHECK_DIR%\models" (
-        set "COMFYUI_ROOT_DIR=%CURRENT_CHECK_DIR%"
+    if exist "%CURRENT_ASCEND_DIR%\models" (
+        set "COMFYUI_ROOT_DIR=%CURRENT_ASCEND_DIR%"
         goto found_comfyui_root
     )
-
-    REM 如果已经是驱动器根目录 (例如 C:\)，则停止
-    if "%CURRENT_CHECK_DIR:~-1%"=="\" if "%CURRENT_CHECK_DIR:~-2%"==":\" (
-        goto not_found_comfyui_root_auto
-    )
-    if "%CURRENT_CHECK_DIR%"=="%CURRENT_CHECK_DIR%\" ( REM 处理类似 X:\ 的情况
-         if "%CURRENT_CHECK_DIR:~-2%"==":\" (
-            goto not_found_comfyui_root_auto
-         )
-    )
-
-
-    REM 获取父目录
-    for %%F in ("%CURRENT_CHECK_DIR%\..") do set "PARENT_DIR=%%~fF"
-
-    REM 如果父目录和当前目录相同，说明到达了顶层，停止
-    if "%PARENT_DIR%"=="%CURRENT_CHECK_DIR%" (
-        goto not_found_comfyui_root_auto
-    )
-
-    set "CURRENT_CHECK_DIR=%PARENT_DIR%"
-    goto find_comfyui_root_loop
-
-:not_found_comfyui_root_auto
-    echo.
-    echo WARNING: Could not automatically detect ComfyUI root directory.
-    REM Fallback: 假设 ComfyUI 根目录是 custom_nodes 的父目录
-    for %%F in ("%NODE_DIR%\..\..") do set "COMFYUI_ROOT_DIR=%%~fF"
-    echo Using fallback ComfyUI root: %COMFYUI_ROOT_DIR%
-    echo Please verify this is correct. If not, manually set COMFYUI_ROOT_DIR in this script.
-    echo.
-    goto continue_with_paths
+    for /f "delims=" %%J in ("%CURRENT_ASCEND_DIR%\..") do set "PARENT_DIR_ASCEND=%%~fJ"
+    if "%PARENT_DIR_ASCEND%"=="%CURRENT_ASCEND_DIR%" goto :comfyui_root_search_done
+    set "CURRENT_ASCEND_DIR=%PARENT_DIR_ASCEND%"
+)
+:comfyui_root_search_done
 
 :found_comfyui_root
+if not defined COMFYUI_ROOT_DIR (
+    echo WARNING: ComfyUI root directory not found automatically.
+    echo (警告: 未能自动找到 ComfyUI 根目录。)
+    REM Fallback to assume ComfyUI root is 2 levels up from NODE_DIR (for standard custom_nodes install)
+    for %%F in ("%NODE_DIR%\..\..") do set "COMFYUI_ROOT_DIR=%%~fF"
+    echo Using approximate ComfyUI root: %COMFYUI_ROOT_DIR%
+    echo (采用近似的 ComfyUI 根目录: %COMFYUI_ROOT_DIR%)
+) else (
     echo ComfyUI root directory detected: %COMFYUI_ROOT_DIR%
-    echo.
+    echo (检测到的 ComfyUI 根目录: %COMFYUI_ROOT_DIR%)
+)
+echo.
 
-:continue_with_paths
-    if not defined COMFYUI_ROOT_DIR (
-        echo ERROR: COMFYUI_ROOT_DIR could not be determined. Exiting.
-        pause
-        exit /b 1
-    )
+REM --- Find Python Executable ---
+REM --- 查找 Python 可执行文件 ---
+set "PYTHON_EXE="
+set "PYTHON_FOUND_METHOD="
 
-REM --- 目标路径设置 ---
+echo Searching for Python executable... (正在查找 Python 可执行文件...)
+
+:: Priority 1: .venv/Scripts/python.exe within ComfyUI root
+if exist "%COMFYUI_ROOT_DIR%\.venv\Scripts\python.exe" (
+    set "PYTHON_EXE=%COMFYUI_ROOT_DIR%\.venv\Scripts\python.exe"
+    set "PYTHON_FOUND_METHOD=ComfyUI .venv"
+    goto found_python
+)
+
+:: Priority 2: python_embeded/python.exe or python/python.exe within ComfyUI root
+if exist "%COMFYUI_ROOT_DIR%\python_embeded\python.exe" (
+    set "PYTHON_EXE=%COMFYUI_ROOT_DIR%\python_embeded\python.exe"
+    set "PYTHON_FOUND_METHOD=ComfyUI embedded"
+    goto found_python
+)
+if exist "%COMFYUI_ROOT_DIR%\python\python.exe" (
+    set "PYTHON_EXE=%COMFYUI_ROOT_DIR%\python\python.exe"
+    set "PYTHON_FOUND_METHOD=ComfyUI local"
+    goto found_python
+)
+
+:: Priority 3: python_embeded/python.exe or python/python.exe one level above ComfyUI root
+for /f "delims=" %%A in ("%COMFYUI_ROOT_DIR%\..") do set "COMFYUI_PARENT_DIR=%%~fA"
+if exist "%COMFYUI_PARENT_DIR%\python_embeded\python.exe" (
+    set "PYTHON_EXE=%COMFYUI_PARENT_DIR%\python_embeded\python.exe"
+    set "PYTHON_FOUND_METHOD=ComfyUI parent embedded"
+    goto found_python
+)
+if exist "%COMFYUI_PARENT_DIR%\python\python.exe" (
+    set "PYTHON_EXE=%COMFYUI_PARENT_DIR%\python\python.exe"
+    set "PYTHON_FOUND_METHOD=ComfyUI parent local"
+    goto found_python
+)
+
+:: Priority 4: System Python (via PATH)
+where python.exe >nul 2>nul
+if %errorlevel% equ 0 (
+    set "PYTHON_EXE=python.exe"
+    set "PYTHON_FOUND_METHOD=System PATH"
+    goto found_python
+)
+
+:python_not_found
+echo ERROR: Python executable not found.
+echo (错误: 未找到 Python 可执行文件。)
+echo Please ensure Python is installed and accessible, or manually set PYTHON_EXE in this script.
+echo (请确保 Python 已安装并可访问，或手动在此脚本中设置 PYTHON_EXE 变量。)
+pause
+exit /b 1
+
+:found_python
+echo Found Python: %PYTHON_EXE% (Method: %PYTHON_FOUND_METHOD%)
+echo (找到 Python: %PYTHON_EXE% (查找方式: %PYTHON_FOUND_METHOD%))
+echo.
+
+REM --- Target Path Setup / 目标路径设置 ---
 set "MODELS_TTS_DIR=%COMFYUI_ROOT_DIR%\models\TTS"
 set "SPARK_MODEL_TARGET_BASE_DIR=%MODELS_TTS_DIR%\Spark-TTS"
 set "SPARK_MODEL_TARGET_DIR=%SPARK_MODEL_TARGET_BASE_DIR%\Spark-TTS-0.5B"
 set "SPEAKER_PRESET_TARGET_DIR=%MODELS_TTS_DIR%\Speaker_Preset"
 
-REM --- 确保目标父目录存在 ---
+REM --- Ensure target parent directories exist / 确保目标父目录存在 ---
 if not exist "%MODELS_TTS_DIR%" (
-    echo Creating directory: %MODELS_TTS_DIR%
+    echo Creating directory (创建目录): %MODELS_TTS_DIR%
     mkdir "%MODELS_TTS_DIR%"
 )
 if not exist "%SPARK_MODEL_TARGET_BASE_DIR%" (
-    echo Creating directory: %SPARK_MODEL_TARGET_BASE_DIR%
+    echo Creating directory (创建目录): %SPARK_MODEL_TARGET_BASE_DIR%
     mkdir "%SPARK_MODEL_TARGET_BASE_DIR%"
 )
 
 
-REM --- 下载 Spark-TTS-0.5B 模型 ---
-echo.
-echo --- Downloading Spark-TTS-0.5B Model ---
-echo Target directory: %SPARK_MODEL_TARGET_DIR%
+REM --- Run Python Download Script ---
+REM --- 运行 Python 下载脚本 ---
+set "DOWNLOAD_SCRIPT_PATH=%NODE_DIR%\model_download\model_download.py"
 
-if exist "%SPARK_MODEL_TARGET_DIR%" (
-    REM 检查目录是否为空的简单方法：尝试列出内容并检查错误级别
-    dir /b "%SPARK_MODEL_TARGET_DIR%" >nul 2>nul
-    if errorlevel 1 (
-        echo Directory %SPARK_MODEL_TARGET_DIR% exists but is empty. Proceeding with download.
-    ) else (
-        echo Spark-TTS-0.5B model directory already exists and is not empty. Skipping download.
-        echo To update, please delete the directory and re-run this script, or download manually.
-        goto download_speaker_preset
-    )
+if not exist "%DOWNLOAD_SCRIPT_PATH%" (
+    echo ERROR: Download script not found at %DOWNLOAD_SCRIPT_PATH%
+    echo (错误: 下载脚本未在以下路径找到: %DOWNLOAD_SCRIPT_PATH%)
+    pause
+    exit /b 1
 )
 
-echo Downloading Spark-TTS-0.5B model from Hugging Face...
-echo This requires git to be installed and in your PATH.
-echo Cloning %SPARK_TTS_MODEL_URL% into %SPARK_MODEL_TARGET_DIR% ...
+echo Calling Python download script...
+echo (正在调用 Python 下载脚本...)
+echo "%PYTHON_EXE%" "%DOWNLOAD_SCRIPT_PATH%"
+"%PYTHON_EXE%" "%DOWNLOAD_SCRIPT_PATH%"
 
-git clone %SPARK_TTS_MODEL_URL% "%SPARK_MODEL_TARGET_DIR%"
-if errorlevel 1 (
-    echo ERROR: Failed to clone Spark-TTS-0.5B model.
-    echo Please check your internet connection, if git is installed and in PATH, or download manually.
-    echo Manual download: %SPARK_TTS_MODEL_URL%
-    echo And place the contents into: %SPARK_MODEL_TARGET_DIR%
+if %errorlevel% neq 0 (
+    echo.
+    echo ERROR: Model download script reported an error. See output above.
+    echo (错误: 模型下载脚本报告错误。请查看上面的输出。)
+    echo If this is due to missing Python packages (e.g., gdown, huggingface_hub, GitPython),
+    echo please try installing them manually using: "%PYTHON_EXE%" -m pip install gdown huggingface_hub "gitpython"
+    echo (如果错误是由于缺少 Python 包 (例如 gdown, huggingface_hub, GitPython)，)
+    echo (请尝试手动安装它们: "%PYTHON_EXE%" -m pip install gdown huggingface_hub "gitpython")
 ) else (
-    echo Spark-TTS-0.5B model downloaded successfully.
-)
-
-
-:download_speaker_preset
-REM --- 下载 Speaker_Preset 文件 ---
-echo.
-echo --- Downloading Speaker_Preset Files ---
-echo Target directory: %SPEAKER_PRESET_TARGET_DIR%
-
-if exist "%SPEAKER_PRESET_TARGET_DIR%" (
-    dir /b "%SPEAKER_PRESET_TARGET_DIR%" >nul 2>nul
-    if errorlevel 1 (
-        echo Directory %SPEAKER_PRESET_TARGET_DIR% exists but is empty. Proceeding with download.
-    ) else (
-        echo Speaker_Preset directory already exists and is not empty. Skipping download.
-        echo To update, please delete the directory and re-run this script, or go into the directory and run 'git pull'.
-        goto end_script
-    )
-)
-
-echo Downloading Speaker_Preset files from GitHub...
-echo This requires git to be installed and in your PATH.
-echo Cloning %SPEAKER_PRESET_REPO_URL% into %SPEAKER_PRESET_TARGET_DIR% ...
-
-git clone %SPEAKER_PRESET_REPO_URL% "%SPEAKER_PRESET_TARGET_DIR%"
-if errorlevel 1 (
-    echo ERROR: Failed to clone Speaker_Preset repository.
-    echo Please check your internet connection, if git is installed and in PATH, or download manually.
-    echo Manual download: %SPEAKER_PRESET_REPO_URL% (Download as ZIP and extract)
-    echo And place the contents into: %SPEAKER_PRESET_TARGET_DIR%
-) else (
-    echo Speaker_Preset files downloaded successfully.
+    echo.
+    echo Model download script finished.
+    echo (模型下载脚本已完成。)
 )
 
 
 :end_script
 echo.
 echo --- All download tasks attempted ---
-echo Please check the following directories:
-echo - Spark-TTS Model: %SPARK_MODEL_TARGET_DIR%
-echo - Speaker Presets: %SPEAKER_PRESET_TARGET_DIR%
+echo --- 所有下载任务已尝试 ---
+echo Please check the following directories to ensure files are complete:
+echo (请检查以下目录以确保文件完整):
+echo - Spark-TTS Model (模型): %SPARK_MODEL_TARGET_DIR%
+echo - Speaker Presets (说话人预设): %SPEAKER_PRESET_TARGET_DIR%
 echo.
-pause
+echo Press any key to exit.
+echo (按任意键退出。)
+pause >nul
 endlocal

@@ -1,0 +1,12 @@
+[
+    {
+        "Model": "Spark-TTS-0.5B",
+        "Address": "https://huggingface.co/SparkAudio/Spark-TTS-0.5B",
+        "To": "models/TTS/Spark-TTS/"
+    },
+    {
+        "Model": "Speaker_Preset",
+        "Address": "https://github.com/KERRY-YUAN/Speaker_Preset",
+        "To": "models/TTS/"
+    }
+]
