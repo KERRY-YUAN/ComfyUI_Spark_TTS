@@ -1,173 +1,178 @@
 @echo off
-chcp 65001 >nul  REM Set console to UTF-8 / 设置控制台编码为 UTF-8
-setlocal enabledelayedexpansion
+setlocal enableDelayedExpansion
 
-REM --- Configuration / 配置 ---
-set "SPARK_TTS_MODEL_URL=https://huggingface.co/SparkAudio/Spark-TTS-0.5B"
-set "SPEAKER_PRESET_REPO_URL=https://github.com/KERRY-YUAN/Speaker_Preset.git"
+:: Change console code page to UTF-8 for proper Chinese display
+chcp 65001 >nul
 
-echo ================================================================================
-echo ComfyUI Spark-TTS Model Downloader
-echo ComfyUI Spark-TTS 模型下载器
-echo ================================================================================
+:: Get the directory where the batch file is located
+set "SCRIPT_DIR=%~dp0"
+
+:: Navigate to the script's directory
+cd "%SCRIPT_DIR%"
+
+echo.
+echo ====================================================================
+echo Node Data Download Script / 节点支持数据下载脚本
+echo ====================================================================
 echo.
 
-REM --- Determine script directory (ComfyUI_Spark_TTS node directory) ---
-REM --- 确定脚本所在目录 (ComfyUI_Spark_TTS 节点目录) ---
-set "NODE_DIR=%~dp0"
-set "NODE_DIR=%NODE_DIR:~0,-1%"
+echo 待下载的模型列表 (model_list.json):
+echo Models to be downloaded (model_list.json):
+echo --------------------------------------------------------------------
+type "%SCRIPT_DIR%model_download\model_list.json"
+echo --------------------------------------------------------------------
+echo.
 
-REM --- Determine ComfyUI root directory by looking for "main.py" or "models" folder ---
-REM --- 确定 ComfyUI 根目录 (通过查找 "main.py" 或 "models" 文件夹) ---
-set "COMFYUI_ROOT_DIR="
-set "CURRENT_ASCEND_DIR=%NODE_DIR%"
-for /L %%i in (1,1,5) do ( REM Ascend up to 5 levels
-    if exist "%CURRENT_ASCEND_DIR%\main.py" (
-        set "COMFYUI_ROOT_DIR=%CURRENT_ASCEND_DIR%"
-        goto found_comfyui_root
-    )
-    if exist "%CURRENT_ASCEND_DIR%\models" (
-        set "COMFYUI_ROOT_DIR=%CURRENT_ASCEND_DIR%"
-        goto found_comfyui_root
-    )
-    for /f "delims=" %%J in ("%CURRENT_ASCEND_DIR%\..") do set "PARENT_DIR_ASCEND=%%~fJ"
-    if "%PARENT_DIR_ASCEND%"=="%CURRENT_ASCEND_DIR%" goto :comfyui_root_search_done
-    set "CURRENT_ASCEND_DIR=%PARENT_DIR_ASCEND%"
+:: --- Step 1: Find ComfyUI Root Directory ---
+set "COMFYUI_ROOT="
+set "CURRENT_SEARCH_DIR=%SCRIPT_DIR%"
+set "MAX_SEARCH_DEPTH=6"
+set "SEARCH_DEPTH=0"
+
+:find_comfyui_root_loop
+if !SEARCH_DEPTH! geq !MAX_SEARCH_DEPTH! goto :end_find_comfyui_root_loop
+
+:: Check if current directory is ComfyUI root (has main.py or models/ and custom_nodes/)
+if exist "!CURRENT_SEARCH_DIR!\main.py" (
+    set "COMFYUI_ROOT=!CURRENT_SEARCH_DIR!"
+    goto :found_comfyui_root
 )
-:comfyui_root_search_done
+if exist "!CURRENT_SEARCH_DIR!\models\" if exist "!CURRENT_SEARCH_DIR!\custom_nodes\" (
+    set "COMFYUI_ROOT=!CURRENT_SEARCH_DIR!"
+    goto :found_comfyui_root
+)
+
+:: Move up one directory
+for /f "delims=" %%I in ("!CURRENT_SEARCH_DIR!\..") do set "PARENT_DIR=%%~fI"
+if "!PARENT_DIR!" == "!CURRENT_SEARCH_DIR!" goto :end_find_comfyui_root_loop :: Prevent infinite loop at root
+set "CURRENT_SEARCH_DIR=!PARENT_DIR!"
+set /a SEARCH_DEPTH+=1
+goto :find_comfyui_root_loop
+
+:end_find_comfyui_root_loop
+:: Fallback if ComfyUI root not found in specified depth
+if not defined COMFYUI_ROOT (
+    echo 警告: 未能通过向上溯源找到 ComfyUI 根目录。脚本可能无法找到正确的 Python 环境。
+    echo Warning: Could not find ComfyUI root by tracing up. Script might not find the correct Python environment.
+    :: For now, proceed, but Python search might be less accurate.
+)
 
 :found_comfyui_root
-if not defined COMFYUI_ROOT_DIR (
-    echo WARNING: ComfyUI root directory not found automatically.
-    echo (警告: 未能自动找到 ComfyUI 根目录。)
-    REM Fallback to assume ComfyUI root is 2 levels up from NODE_DIR (for standard custom_nodes install)
-    for %%F in ("%NODE_DIR%\..\..") do set "COMFYUI_ROOT_DIR=%%~fF"
-    echo Using approximate ComfyUI root: %COMFYUI_ROOT_DIR%
-    echo (采用近似的 ComfyUI 根目录: %COMFYUI_ROOT_DIR%)
+if defined COMFYUI_ROOT (
+    echo 检测到 ComfyUI 根目录: "%COMFYUI_ROOT%"
+    echo Detected ComfyUI Root: "%COMFYUI_ROOT%"
 ) else (
-    echo ComfyUI root directory detected: %COMFYUI_ROOT_DIR%
-    echo (检测到的 ComfyUI 根目录: %COMFYUI_ROOT_DIR%)
+    echo 无法确定 ComfyUI 根目录。Python 路径查找将从节点目录开始。
+    echo Unable to determine ComfyUI root. Python path search will start from node directory.
+    set "COMFYUI_ROOT=%SCRIPT_DIR%"
 )
 echo.
 
-REM --- Find Python Executable ---
-REM --- 查找 Python 可执行文件 ---
+:: --- Step 2: Find Python Executable Based on Priority ---
 set "PYTHON_EXE="
-set "PYTHON_FOUND_METHOD="
+set "COMFYUI_PARENT_DIR="
+if defined COMFYUI_ROOT for /f "delims=" %%I in ("%COMFYUI_ROOT%\..") do set "COMFYUI_PARENT_DIR=%%~fI"
 
-echo Searching for Python executable... (正在查找 Python 可执行文件...)
-
-:: Priority 1: .venv/Scripts/python.exe within ComfyUI root
-if exist "%COMFYUI_ROOT_DIR%\.venv\Scripts\python.exe" (
-    set "PYTHON_EXE=%COMFYUI_ROOT_DIR%\.venv\Scripts\python.exe"
-    set "PYTHON_FOUND_METHOD=ComfyUI .venv"
-    goto found_python
+:: Priority 1: .venv inside ComfyUI root
+if exist "%COMFYUI_ROOT%\.venv\Scripts\python.exe" (
+    set "PYTHON_EXE=%COMFYUI_ROOT%\.venv\Scripts\python.exe"
+    goto :found_python
 )
 
-:: Priority 2: python_embeded/python.exe or python/python.exe within ComfyUI root
-if exist "%COMFYUI_ROOT_DIR%\python_embeded\python.exe" (
-    set "PYTHON_EXE=%COMFYUI_ROOT_DIR%\python_embeded\python.exe"
-    set "PYTHON_FOUND_METHOD=ComfyUI embedded"
-    goto found_python
+:: Priority 2: python_embeded or python folder inside ComfyUI root
+if exist "%COMFYUI_ROOT%\python_embeded\python.exe" (
+    set "PYTHON_EXE=%COMFYUI_ROOT%\python_embeded\python.exe"
+    goto :found_python
 )
-if exist "%COMFYUI_ROOT_DIR%\python\python.exe" (
-    set "PYTHON_EXE=%COMFYUI_ROOT_DIR%\python\python.exe"
-    set "PYTHON_FOUND_METHOD=ComfyUI local"
-    goto found_python
+if exist "%COMFYUI_ROOT%\python\python.exe" (
+    set "PYTHON_EXE=%COMFYUI_ROOT%\python\python.exe"
+    goto :found_python
 )
 
-:: Priority 3: python_embeded/python.exe or python/python.exe one level above ComfyUI root
-for /f "delims=" %%A in ("%COMFYUI_ROOT_DIR%\..") do set "COMFYUI_PARENT_DIR=%%~fA"
-if exist "%COMFYUI_PARENT_DIR%\python_embeded\python.exe" (
-    set "PYTHON_EXE=%COMFYUI_PARENT_DIR%\python_embeded\python.exe"
-    set "PYTHON_FOUND_METHOD=ComfyUI parent embedded"
-    goto found_python
-)
-if exist "%COMFYUI_PARENT_DIR%\python\python.exe" (
-    set "PYTHON_EXE=%COMFYUI_PARENT_DIR%\python\python.exe"
-    set "PYTHON_FOUND_METHOD=ComfyUI parent local"
-    goto found_python
+:: Priority 3: python_embeded or python folder in ComfyUI's parent directory
+if defined COMFYUI_PARENT_DIR (
+    if exist "%COMFYUI_PARENT_DIR%\python_embeded\python.exe" (
+        set "PYTHON_EXE=%COMFYUI_PARENT_DIR%\python_embeded\python.exe"
+        goto :found_python
+    )
+    if exist "%COMFYUI_PARENT_DIR%\python\python.exe" (
+        set "PYTHON_EXE=%COMFYUI_PARENT_DIR%\python\python.exe"
+        goto :found_python
+    )
 )
 
-:: Priority 4: System Python (via PATH)
+:: Priority 4: System-wide Python in PATH
 where python.exe >nul 2>nul
 if %errorlevel% equ 0 (
     set "PYTHON_EXE=python.exe"
-    set "PYTHON_FOUND_METHOD=System PATH"
-    goto found_python
+    goto :found_python
 )
 
-:python_not_found
-echo ERROR: Python executable not found.
-echo (错误: 未找到 Python 可执行文件。)
-echo Please ensure Python is installed and accessible, or manually set PYTHON_EXE in this script.
-echo (请确保 Python 已安装并可访问，或手动在此脚本中设置 PYTHON_EXE 变量。)
-pause
-exit /b 1
+:: --- Fallback: Prompt user for Python path ---
+:prompt_for_python_path
+echo 错误: 未能在自动查找路径中找到 Python 可执行文件。
+echo Error: Python executable not found in automatic search paths.
+echo.
+echo 请手动输入您的 ComfyUI Python 环境路径 (例如: D:\Program\ComfyUI_Program\ComfyUI\.venv):
+echo Please manually enter your ComfyUI Python environment path (e.g., D:\Program\ComfyUI_Program\ComfyUI\.venv):
+set "USER_PYTHON_ENV_PATH="
+set /p "USER_PYTHON_ENV_PATH="
+
+:: Check if user input is empty
+if "!USER_PYTHON_ENV_PATH!"=="" (
+    echo.
+    echo 警告: 未输入路径。请重新输入。
+    echo Warning: No path entered. Please try again.
+    echo.
+    goto :prompt_for_python_path
+)
+
+:: Construct the full python.exe path based on user input
+set "TEMP_PYTHON_EXE_USER="
+if exist "!USER_PYTHON_ENV_PATH!\Scripts\python.exe" (
+    set "TEMP_PYTHON_EXE_USER=!USER_PYTHON_ENV_PATH!\Scripts\python.exe"
+) else if exist "!USER_PYTHON_ENV_PATH!\python.exe" (
+    set "TEMP_PYTHON_EXE_USER=!USER_PYTHON_ENV_PATH!\python.exe"
+)
+
+if not defined TEMP_PYTHON_EXE_USER (
+    echo.
+    echo 无效路径: "%USER_PYTHON_ENV_PATH%"。未能找到 python.exe。请重试。
+    echo Invalid path: "%USER_PYTHON_ENV_PATH%". python.exe not found. Please try again.
+    echo.
+    goto :prompt_for_python_path
+) else (
+    set "PYTHON_EXE=!TEMP_PYTHON_EXE_USER!"
+    echo.
+    echo 已接受的用户提供的 Python 路径: "%PYTHON_EXE%"
+    echo Accepted user-provided Python path: "%PYTHON_EXE%"
+    goto :found_python_execution
+)
 
 :found_python
-echo Found Python: %PYTHON_EXE% (Method: %PYTHON_FOUND_METHOD%)
-echo (找到 Python: %PYTHON_EXE% (查找方式: %PYTHON_FOUND_METHOD%))
+echo 使用 Python: "%PYTHON_EXE%"
+echo Using Python: "%PYTHON_EXE%"
 echo.
 
-REM --- Target Path Setup / 目标路径设置 ---
-set "MODELS_TTS_DIR=%COMFYUI_ROOT_DIR%\models\TTS"
-set "SPARK_MODEL_TARGET_BASE_DIR=%MODELS_TTS_DIR%\Spark-TTS"
-set "SPARK_MODEL_TARGET_DIR=%SPARK_MODEL_TARGET_BASE_DIR%\Spark-TTS-0.5B"
-set "SPEAKER_PRESET_TARGET_DIR=%MODELS_TTS_DIR%\Speaker_Preset"
+:found_python_execution
+:: --- Step 3: Run the model_download.py script ---
+echo 启动模型下载...
+echo Starting model download...
+"%PYTHON_EXE%" "%SCRIPT_DIR%model_download\model_download.py"
 
-REM --- Ensure target parent directories exist / 确保目标父目录存在 ---
-if not exist "%MODELS_TTS_DIR%" (
-    echo Creating directory (创建目录): %MODELS_TTS_DIR%
-    mkdir "%MODELS_TTS_DIR%"
-)
-if not exist "%SPARK_MODEL_TARGET_BASE_DIR%" (
-    echo Creating directory (创建目录): %SPARK_MODEL_TARGET_BASE_DIR%
-    mkdir "%SPARK_MODEL_TARGET_BASE_DIR%"
-)
-
-
-REM --- Run Python Download Script ---
-REM --- 运行 Python 下载脚本 ---
-set "DOWNLOAD_SCRIPT_PATH=%NODE_DIR%\model_download\model_download.py"
-
-if not exist "%DOWNLOAD_SCRIPT_PATH%" (
-    echo ERROR: Download script not found at %DOWNLOAD_SCRIPT_PATH%
-    echo (错误: 下载脚本未在以下路径找到: %DOWNLOAD_SCRIPT_PATH%)
+if %errorlevel% neq 0 (
+    echo.
+    echo 模型下载失败。请检查上方输出中的错误信息。
+    echo Model download failed. Please check the output above for errors.
     pause
     exit /b 1
 )
 
-echo Calling Python download script...
-echo (正在调用 Python 下载脚本...)
-echo "%PYTHON_EXE%" "%DOWNLOAD_SCRIPT_PATH%"
-"%PYTHON_EXE%" "%DOWNLOAD_SCRIPT_PATH%"
-
-if %errorlevel% neq 0 (
-    echo.
-    echo ERROR: Model download script reported an error. See output above.
-    echo (错误: 模型下载脚本报告错误。请查看上面的输出。)
-    echo If this is due to missing Python packages (e.g., gdown, huggingface_hub, GitPython),
-    echo please try installing them manually using: "%PYTHON_EXE%" -m pip install gdown huggingface_hub "gitpython"
-    echo (如果错误是由于缺少 Python 包 (例如 gdown, huggingface_hub, GitPython)，)
-    echo (请尝试手动安装它们: "%PYTHON_EXE%" -m pip install gdown huggingface_hub "gitpython")
-) else (
-    echo.
-    echo Model download script finished.
-    echo (模型下载脚本已完成。)
-)
-
-
-:end_script
 echo.
-echo --- All download tasks attempted ---
-echo --- 所有下载任务已尝试 ---
-echo Please check the following directories to ensure files are complete:
-echo (请检查以下目录以确保文件完整):
-echo - Spark-TTS Model (模型): %SPARK_MODEL_TARGET_DIR%
-echo - Speaker Presets (说话人预设): %SPEAKER_PRESET_TARGET_DIR%
+echo 模型下载完成。
+echo Model download completed successfully.
 echo.
-echo Press any key to exit.
-echo (按任意键退出。)
-pause >nul
+echo 您现在可以重启 ComfyUI 以加载模型。
+echo You can now restart ComfyUI to load the models.
+pause
 endlocal
