@@ -1,11 +1,11 @@
         {
             "author": "KERRY-YUAN",
-            "title": "NodeSparkTTS",
-            "id": "NodeSparkTTS",
+            "title": "ComfyUI_Spark_TTS",
+            "id": "ComfyUI_Spark_TTS",
             "reference": "https://github.com/KERRY-YUAN/ComfyUI_Spark_TTS",
             "files": [
                 "https://github.com/KERRY-YUAN/ComfyUI_Spark_TTS"
             ],
             "install_type": "git-clone",
-            "description": "This node package contains nodes for Spark-TTS controllable synthesis and voice cloning.."
+            "description": "Spark-TTS controllable synthesis and voice cloning."
         },
