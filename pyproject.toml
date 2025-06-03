@@ -1,5 +1,5 @@
 [project]
-name = "spark_tts"
+name = "ComfyUI_Spark_TTS"
 description = "Spark-TTS controllable synthesis and voice cloning. 用于可控语音合成和语音克隆，基于官方 Spark-TTS 库的核心逻辑实现。."
 version = "0.5.0"
 license = {file = "LICENSE"}
