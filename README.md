@@ -23,6 +23,7 @@ A custom node package for ComfyUI that integrates the powerful Spark-TTS text-to
     *   `speed`: Select speed level (from "very_low" to "very_high").
     *   `temperature`, `top_k`, `top_p`, `max_new_tokens`: Adjust the diversity and length of the generated speech.
     *   `keep_model_loaded`: Choose whether to keep the model in memory after generation (True keeps it, faster; False unloads it, saves VRAM).
+	*   `use_cpu`: Choose to execute on the CPU (for devices that cannot schedule Gpus, such as some AMD Gpus).
 *   **Outputs**:
     *   `Audio`: The generated audio.
     *   `Node Status`: Displays the running status or error messages.
@@ -39,6 +40,7 @@ A custom node package for ComfyUI that integrates the powerful Spark-TTS text-to
     *   `pitch`, `speed`: (Optional) Adjust the pitch and speed of the output voice, mainly effective when the cloning signal is not strong or for future features.
     *   `temperature`, `top_k`, `top_p`, `max_new_tokens`: Adjust the diversity and length of the generated speech.
     *   `keep_model_loaded`: Choose whether to keep the model in memory after generation.
+	*   `use_cpu`: Choose execute on the CPU (for devices that cannot schedule Gpus, such as some AMD Gpus).
 *   **Outputs**:
     *   `Audio`: The generated cloned speech.
     *   `Node Status`: Displays the running status or error messages.
@@ -72,7 +74,7 @@ A custom node package for ComfyUI that integrates the powerful Spark-TTS text-to
 
 ## 📥 Model and Data Setup
 
-The Spark-TTS model and Speaker Preset data **must be placed in specific default locations** for the nodes to function correctly. The node will attempt to automatically download any missing models/data when it's first used in a workflow.
+The Spark-TTS model and Speaker Preset data **must be placed in specific default locations** for the nodes to function correctly. The node will attempt to ** automatically download ** any missing models/data when it's first used in a workflow.
 
 If the automatic download fails, or if you prefer to download them manually beforehand, you can run the `Model_Download.bat` script located in the `ComfyUI_Spark_TTS` custom node directory.
 
@@ -161,6 +163,7 @@ Please refer to the [LICENSE](LICENSE) file for details.
     *   `speed`: 选择语速（从“very_low”到“very_high”）。
     *   `temperature`, `top_k`, `top_p`, `max_new_tokens`: 调整语音生成的多样性和长度。
     *   `keep_model_loaded`: 选择是否在生成后保留模型在内存中（True则保留，更快；False则卸载，省显存）。
+	*   `use_cpu`: 选择在 CPU 上执行（针对无法调度GPU的设备使用，如部分AMD的GPU）。
 *   **输出**:
     *   `Audio`: 生成的音频。
     *   `Node Status`: 显示运行状态或错误信息。
@@ -177,6 +180,7 @@ Please refer to the [LICENSE](LICENSE) file for details.
     *   `pitch`, `speed`: （可选）调整输出语音的音高和语速，主要在克隆信号不强时或为未来功能预留。
     *   `temperature`, `top_k`, `top_p`, `max_new_tokens`: 调整语音生成的多样性和长度。
     *   `keep_model_loaded`: 选择是否在生成后保留模型在内存中。
+	*   `use_cpu`: 选择在 CPU 上执行（针对无法调度GPU的设备使用，如部分AMD的GPU）。
 *   **输出**:
     *   `Audio`: 生成的克隆语音。
     *   `Node Status`: 显示运行状态或错误信息。
@@ -210,7 +214,7 @@ Please refer to the [LICENSE](LICENSE) file for details.
 
 ## 📥 模型和数据设置
 
-Spark-TTS 模型和说话人预设数据 **必须放置在特定的默认位置**，节点才能正常工作。当节点在工作流中首次使用时，它会尝试自动下载任何缺失的模型/数据。
+Spark-TTS 模型和说话人预设数据 **必须放置在特定的默认位置**，节点才能正常工作。当节点在工作流中首次使用时，它会尝试**自动下载**任何缺失的模型/数据。
 
 如果自动下载失败，或者您希望预先手动下载它们，可以运行位于 `ComfyUI_Spark_TTS` 自定义节点目录中的 `Model_Download.bat` 脚本。
 
